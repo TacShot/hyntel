@@ -13,13 +13,8 @@ function Test-Command {
 }
 
 function Install-Python {
-    if (Test-Command "python") {
-        Write-Log "python already installed"
-        return
-    }
-
-    if (Test-Command "py") {
-        Write-Log "Python launcher already installed"
+    if (Test-Python3) {
+        Write-Log "Python 3 already installed"
         return
     }
 
@@ -27,18 +22,58 @@ function Install-Python {
         throw "winget is required on Windows to install Python automatically."
     }
 
-    Write-Log "Installing Python with winget"
-    winget install --id Python.Python.3.12 --exact --accept-package-agreements --accept-source-agreements
+    $packageIds = @(
+        "Python.Python.3.14",
+        "Python.Python.3.13",
+        "Python.Python.3.12",
+        "Python.Python.3.11",
+        "Python.Python.3.10",
+        "Python.Python.3.9"
+    )
+
+    foreach ($packageId in $packageIds) {
+        Write-Log "Trying to install Python with winget package $packageId"
+        winget install --id $packageId --exact --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -eq 0 -and (Test-Python3)) {
+            return
+        }
+    }
+
+    throw "winget could not install a supported Python 3 package automatically."
+}
+
+function Test-Python3 {
+    if (Test-Command "python") {
+        & python -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+    }
+
+    if (Test-Command "py") {
+        & py -3 -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Resolve-Python {
     if (Test-Command "python") {
-        return "python"
+        & python -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return "python"
+        }
     }
     if (Test-Command "py") {
-        return "py -3"
+        & py -3 -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return "py -3"
+        }
     }
-    throw "Python was not found after installation."
+    throw "Python 3 was not found after installation."
 }
 
 function Invoke-Python {

@@ -11,6 +11,26 @@ has_command() {
   command -v "$1" >/dev/null 2>&1
 }
 
+is_python3_command() {
+  local candidate="$1"
+  if ! has_command "$candidate"; then
+    return 1
+  fi
+  "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)' >/dev/null 2>&1
+}
+
+resolve_python() {
+  if is_python3_command python3; then
+    echo "python3"
+    return
+  fi
+  if is_python3_command python; then
+    echo "python"
+    return
+  fi
+  return 1
+}
+
 require_sudo() {
   if [[ "${EUID}" -ne 0 ]]; then
     sudo "$@"
@@ -33,8 +53,8 @@ detect_os() {
 }
 
 install_python_linux() {
-  if has_command python3; then
-    log "python3 already installed"
+  if resolve_python >/dev/null 2>&1; then
+    log "Python 3 already installed"
     return
   fi
 
@@ -56,8 +76,8 @@ install_python_linux() {
 }
 
 install_python_macos() {
-  if has_command python3; then
-    log "python3 already installed"
+  if resolve_python >/dev/null 2>&1; then
+    log "Python 3 already installed"
     return
   fi
 
@@ -71,16 +91,18 @@ install_python_macos() {
 }
 
 ensure_pip() {
-  if python3 -m pip --version >/dev/null 2>&1; then
+  local python_cmd="$1"
+  if "$python_cmd" -m pip --version >/dev/null 2>&1; then
     return
   fi
   log "Bootstrapping pip"
-  python3 -m ensurepip --upgrade
+  "$python_cmd" -m ensurepip --upgrade
 }
 
 setup_virtualenv() {
+  local python_cmd="$1"
   log "Creating virtual environment in ${ROOT_DIR}/.venv"
-  python3 -m venv "${ROOT_DIR}/.venv"
+  "$python_cmd" -m venv "${ROOT_DIR}/.venv"
   log "Installing project in editable mode"
   "${ROOT_DIR}/.venv/bin/python" -m pip install --upgrade pip
   "${ROOT_DIR}/.venv/bin/python" -m pip install -e "${ROOT_DIR}"
@@ -96,8 +118,13 @@ main() {
       ;;
   esac
 
-  ensure_pip
-  setup_virtualenv
+  python_cmd="$(resolve_python)" || {
+    echo "A Python 3 interpreter could not be found after installation." >&2
+    exit 1
+  }
+
+  ensure_pip "$python_cmd"
+  setup_virtualenv "$python_cmd"
 
   log "Setup complete"
   log "Activate with: source ${ROOT_DIR}/.venv/bin/activate"

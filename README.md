@@ -13,7 +13,7 @@ Cross-platform CLI for security configuration auditing on Linux, macOS, and Wind
 
 ## Install
 
-Bootstrap with the host package manager:
+Bootstrap with the host package manager. The scripts accept any installed Python 3 interpreter, and if none is present they install a current Python 3 package through the native package manager:
 
 ```bash
 ./setup.sh
@@ -25,7 +25,7 @@ On Windows PowerShell:
 .\setup.ps1
 ```
 
-Manual setup is also supported:
+Manual setup is also supported with any Python 3 interpreter:
 
 ```bash
 python3 -m venv .venv
@@ -67,6 +67,7 @@ security-audit --target-os windows
 - Applying remediation still requires operator review and appropriate privileges.
 - NVD API key support is available through the `NVD_API_KEY` environment variable.
 - `setup.sh` supports `apt-get`, `pacman`, and `brew`. `setup.ps1` uses `winget`.
+- The project metadata now accepts Python 3.7+.
 
 ## NVD source
 
