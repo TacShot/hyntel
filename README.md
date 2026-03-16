@@ -13,6 +13,20 @@ Cross-platform CLI for security configuration auditing on Linux, macOS, and Wind
 
 ## Install
 
+Bootstrap with the host package manager:
+
+```bash
+./setup.sh
+```
+
+On Windows PowerShell:
+
+```powershell
+.\setup.ps1
+```
+
+Manual setup is also supported:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -52,6 +66,7 @@ security-audit --target-os windows
 - CVE mapping is heuristic. The tool searches NVD for vulnerabilities related to the failed control area; it does not claim that a local misconfiguration itself has a CVE.
 - Applying remediation still requires operator review and appropriate privileges.
 - NVD API key support is available through the `NVD_API_KEY` environment variable.
+- `setup.sh` supports `apt-get`, `pacman`, and `brew`. `setup.ps1` uses `winget`.
 
 ## NVD source
 
