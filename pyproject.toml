@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "security-audit-tool"
+version = "0.1.0"
+description = "Cross-platform system security configuration auditing CLI for Linux, macOS, and Windows."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "OpenAI Codex" }
+]
+dependencies = []
+
+[project.scripts]
+security-audit = "security_audit_tool.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["security_audit_tool*"]
