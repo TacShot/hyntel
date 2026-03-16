@@ -1,7 +1,9 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from security_audit_tool.cli import _render_json_report
+from security_audit_tool.reporting import export_report_bundle, render_json_report
 from security_audit_tool.models import CheckResult, CommandResult
 from security_audit_tool.remediation import render_remediation_script
 from security_audit_tool.system_checks import CommandRunner, run_audit
@@ -48,13 +50,25 @@ class AuditTests(unittest.TestCase):
 
     def test_json_report_includes_summary(self):
         rule = type("Rule", (), {"identifier": "rule1", "title": "Rule", "severity": "high"})
-        report = _render_json_report(
+        report = render_json_report(
             "linux",
             [(rule, CheckResult(rule_id="rule1", status="pass", details="ok"))],
             None,
         )
         payload = json.loads(report)
         self.assertEqual(payload["summary"]["passed"], 1)
+
+    def test_export_bundle_writes_desktop_artifacts(self):
+        rule = type("Rule", (), {"identifier": "rule1", "title": "Rule", "severity": "high"})
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exported = export_report_bundle(
+                "linux",
+                [(rule, CheckResult(rule_id="rule1", status="pass", details="ok"))],
+                None,
+                desktop_base=Path(tmpdir),
+            )
+            self.assertTrue(exported["text_report"].exists())
+            self.assertTrue(exported["json_report"].exists())
 
 
 if __name__ == "__main__":

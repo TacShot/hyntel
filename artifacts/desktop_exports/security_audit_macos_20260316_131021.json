@@ -1,0 +1,59 @@
+{
+  "target_os": "macos",
+  "summary": {
+    "passed": 1,
+    "failed": 1,
+    "skipped": 2
+  },
+  "results": [
+    {
+      "rule_id": "macos_firewall_enabled",
+      "title": "macOS firewall enabled",
+      "severity": "high",
+      "status": "fail",
+      "details": "macOS application firewall is disabled.",
+      "observed_value": "Firewall is disabled. (State = 0)",
+      "remediation": [
+        "sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on"
+      ],
+      "related_cves": []
+    },
+    {
+      "rule_id": "macos_filevault_enabled",
+      "title": "macOS FileVault enabled",
+      "severity": "high",
+      "status": "skip",
+      "details": "FileVault status is unavailable in the current execution environment.",
+      "observed_value": null,
+      "remediation": [
+        "sudo fdesetup enable"
+      ],
+      "related_cves": []
+    },
+    {
+      "rule_id": "macos_remote_login_disabled",
+      "title": "macOS Remote Login disabled",
+      "severity": "high",
+      "status": "skip",
+      "details": "Remote Login status requires elevated privileges to read.",
+      "observed_value": null,
+      "remediation": [
+        "sudo systemsetup -setremotelogin off"
+      ],
+      "related_cves": []
+    },
+    {
+      "rule_id": "macos_auto_updates_enabled",
+      "title": "macOS automatic updates enabled",
+      "severity": "medium",
+      "status": "pass",
+      "details": "Automatic updates are enabled.",
+      "observed_value": "Automatic checking for updates is turned on",
+      "remediation": [
+        "sudo softwareupdate --schedule on"
+      ],
+      "related_cves": []
+    }
+  ],
+  "remediation_script": null
+}

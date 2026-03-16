@@ -2,6 +2,8 @@
 
 A cross-platform command-line tool for auditing baseline system security settings on Linux, macOS, and Windows. The project evaluates common hardening controls, optionally enriches failed findings with related CVEs from the NIST National Vulnerability Database (NVD), and can generate remediation scripts for operator review.
 
+The project now includes a cross-platform GUI with a retro terminal-style interface. Every completed scan can automatically export the final report bundle to the current user's Desktop.
+
 ## Overview
 
 This project is designed to support security configuration reviews with a simple workflow:
@@ -11,6 +13,7 @@ This project is designed to support security configuration reviews with a simple
 - Flag failed or skipped controls
 - Optionally query NIST NVD for related vulnerabilities
 - Generate a remediation script for failed findings
+- Save the final report bundle to Desktop
 
 The tool is intended for security assessment and hardening support. It does not assume that a local misconfiguration directly maps to a specific CVE. CVE enrichment is best understood as related vulnerability context.
 
@@ -54,8 +57,9 @@ flowchart TD
     R --> S
     S -->|"Yes"| T["Write platform-specific remediation script"]
     S -->|"No"| U["Return report only"]
-    T --> V["Print text or JSON report"]
+    T --> V["Export text and JSON reports to Desktop"]
     U --> V
+    V --> W["Print CLI output or render GUI terminal view"]
 ```
 
 ## Project Structure
@@ -65,6 +69,8 @@ flowchart TD
 | `setup.sh` | Bootstrap script for Linux and macOS |
 | `setup.ps1` | Bootstrap script for Windows |
 | `security_audit_tool/cli.py` | CLI entry point and report rendering |
+| `security_audit_tool/gui.py` | Retro terminal-style Tkinter GUI |
+| `security_audit_tool/reporting.py` | Shared report rendering and Desktop export |
 | `security_audit_tool/system_checks.py` | OS detection and audit rules |
 | `security_audit_tool/nvd.py` | NIST NVD CVE API integration |
 | `security_audit_tool/remediation.py` | Remediation script generation |
@@ -128,6 +134,12 @@ Audit the current host using automatic OS detection:
 security-audit
 ```
 
+### Save Reports to Desktop
+
+```bash
+security-audit --save-to-desktop
+```
+
 ### JSON Output
 
 ```bash
@@ -152,6 +164,14 @@ security-audit --generate-remediation
 security-audit --include-cves --generate-remediation --format json
 ```
 
+### Launch the GUI
+
+```bash
+security-audit-gui
+```
+
+The GUI uses a retro terminal-style interface and automatically exports the final text and JSON reports to `Desktop/SecurityAuditReports/` after each completed scan.
+
 ### Explicit Target Ruleset
 
 ```bash
@@ -172,6 +192,12 @@ When remediation generation is enabled, the tool writes a platform-specific scri
 - Linux: `artifacts/remediate_linux.sh`
 - macOS: `artifacts/remediate_macos.sh`
 - Windows: `artifacts/remediate_windows.ps1`
+
+Report bundle export location:
+
+- Linux: `~/Desktop/SecurityAuditReports/`
+- macOS: `~/Desktop/SecurityAuditReports/`
+- Windows: `%USERPROFILE%\Desktop\SecurityAuditReports\`
 
 ## CVE Enrichment
 

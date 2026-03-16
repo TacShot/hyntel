@@ -1,0 +1,2 @@
+[console_scripts]
+security-audit = security_audit_tool.cli:main

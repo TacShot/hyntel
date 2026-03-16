@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
 from .models import CheckResult
 from .nvd import fetch_related_cves
+from .reporting import export_report_bundle, render_json_report, render_text_report
 from .remediation import write_remediation_script
 from .system_checks import detect_platform, run_audit
 
@@ -49,6 +49,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Generate a remediation script for failed checks.",
     )
+    parser.add_argument(
+        "--save-to-desktop",
+        action="store_true",
+        help="Save the final text and JSON reports to the current user's Desktop.",
+    )
     return parser
 
 
@@ -81,62 +86,6 @@ def _attach_cves(results: list[tuple], per_finding: int) -> None:
             seen.add(key)
             result.related_cves.append(item)
 
-
-def _render_text_report(target_os: str, results: list[tuple], remediation_path: Path | None) -> str:
-    lines = [f"Security audit report for {target_os}", ""]
-    summary = {"pass": 0, "fail": 0, "skip": 0}
-    for _, result in results:
-        summary[result.status] = summary.get(result.status, 0) + 1
-    lines.append(f"Summary: {summary['pass']} passed, {summary['fail']} failed, {summary['skip']} skipped")
-    lines.append("")
-    for rule, result in results:
-        lines.append(f"[{result.status.upper()}] {rule.title} ({rule.severity})")
-        lines.append(f"  Rule ID: {rule.identifier}")
-        lines.append(f"  Details: {result.details}")
-        if result.observed_value:
-            lines.append(f"  Observed: {result.observed_value}")
-        if result.related_cves:
-            lines.append("  Related CVEs from NIST NVD:")
-            for cve in result.related_cves:
-                cve_id = cve.get("id") or "lookup-unavailable"
-                severity = cve.get("severity") or "unknown"
-                score = cve.get("score")
-                score_text = f", score {score}" if score is not None else ""
-                lines.append(f"    - {cve_id} ({severity}{score_text})")
-                if cve.get("description"):
-                    lines.append(f"      {cve['description']}")
-        lines.append("")
-    if remediation_path:
-        lines.append(f"Remediation script: {remediation_path}")
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _render_json_report(target_os: str, results: list[tuple], remediation_path: Path | None) -> str:
-    payload = {
-        "target_os": target_os,
-        "summary": {
-            "passed": sum(1 for _, result in results if result.status == "pass"),
-            "failed": sum(1 for _, result in results if result.status == "fail"),
-            "skipped": sum(1 for _, result in results if result.status == "skip"),
-        },
-        "results": [
-            {
-                "rule_id": rule.identifier,
-                "title": rule.title,
-                "severity": rule.severity,
-                "status": result.status,
-                "details": result.details,
-                "observed_value": result.observed_value,
-                "remediation": result.remediation,
-                "related_cves": result.related_cves,
-            }
-            for rule, result in results
-        ],
-        "remediation_script": str(remediation_path) if remediation_path else None,
-    }
-    return json.dumps(payload, indent=2) + "\n"
-
-
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -155,10 +104,14 @@ def main() -> int:
     if args.generate_remediation and failed_results:
         remediation_path = write_remediation_script(args.output_dir, target_os, failed_results)
 
+    if args.save_to_desktop:
+        exported = export_report_bundle(target_os, results, remediation_path)
+        print(f"Saved reports to Desktop: {exported['text_report']}")
+
     if args.format == "json":
-        print(_render_json_report(target_os, results, remediation_path), end="")
+        print(render_json_report(target_os, results, remediation_path), end="")
     else:
-        print(_render_text_report(target_os, results, remediation_path), end="")
+        print(render_text_report(target_os, results, remediation_path), end="")
     return 0
 
 

@@ -1,0 +1,21 @@
+Security audit report for macos
+
+Summary: 1 passed, 1 failed, 2 skipped
+
+[FAIL] macOS firewall enabled (high)
+  Rule ID: macos_firewall_enabled
+  Details: macOS application firewall is disabled.
+  Observed: Firewall is disabled. (State = 0)
+
+[SKIP] macOS FileVault enabled (high)
+  Rule ID: macos_filevault_enabled
+  Details: FileVault status is unavailable in the current execution environment.
+
+[SKIP] macOS Remote Login disabled (high)
+  Rule ID: macos_remote_login_disabled
+  Details: Remote Login status requires elevated privileges to read.
+
+[PASS] macOS automatic updates enabled (medium)
+  Rule ID: macos_auto_updates_enabled
+  Details: Automatic updates are enabled.
+  Observed: Automatic checking for updates is turned on
