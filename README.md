@@ -96,6 +96,22 @@ Supported package managers:
 
 #### Windows PowerShell
 
+If PowerShell blocks local script execution, allow the setup script first.
+
+Temporary for the current shell only:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+Persistent for the current user:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+Then run:
+
 ```powershell
 .\setup.ps1
 ```
@@ -118,11 +134,28 @@ pip install -e .
 
 #### Windows PowerShell
 
+If activation is blocked, allow local signed and local scripts for the current user:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+Then run:
+
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e .
 ```
+
+## Executables
+
+The project installs two executables so users can run either interface directly after setup.
+
+| Executable | Interface | Purpose |
+| --- | --- | --- |
+| `security-audit` | CLI | Run audits from the terminal, use flags, and integrate with scripts or automation |
+| `security-audit-gui` | GUI | Launch the retro terminal-style desktop application for interactive use |
 
 ## Usage
 
@@ -164,7 +197,7 @@ security-audit --generate-remediation
 security-audit --include-cves --generate-remediation --format json
 ```
 
-### Launch the GUI
+### Launch the GUI Executable
 
 ```bash
 security-audit-gui
