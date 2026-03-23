@@ -9,6 +9,16 @@ from urllib.request import Request, urlopen
 from .models import CVEQuery
 
 NVD_CVE_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+NVD_CPE_API = "https://services.nvd.nist.gov/rest/json/cpes/2.0"
+
+
+def _request_nvd(url: str, api_key: str | None = None, timeout: int = 15) -> dict[str, Any]:
+    request = Request(url, headers={"User-Agent": "security-audit-tool/0.1.0"})
+    key = api_key or os.getenv("NVD_API_KEY")
+    if key:
+        request.add_header("apiKey", key)
+    with urlopen(request, timeout=timeout) as response:
+        return json.load(response)
 
 
 def _extract_description(cve: dict[str, Any]) -> str:
@@ -43,14 +53,54 @@ def fetch_related_cves(
         "resultsPerPage": str(limit),
     }
     url = f"{NVD_CVE_API}?{urlencode(params)}"
-    request = Request(url, headers={"User-Agent": "security-audit-tool/0.1.0"})
-    key = api_key or os.getenv("NVD_API_KEY")
-    if key:
-        request.add_header("apiKey", key)
+    payload = _request_nvd(url, api_key=api_key, timeout=timeout)
 
-    with urlopen(request, timeout=timeout) as response:
-        payload = json.load(response)
+    results: list[dict[str, Any]] = []
+    for item in payload.get("vulnerabilities", []):
+        cve = item.get("cve", {})
+        severity, score = _extract_cvss(cve)
+        results.append(
+            {
+                "id": cve.get("id"),
+                "published": cve.get("published"),
+                "lastModified": cve.get("lastModified"),
+                "severity": severity,
+                "score": score,
+                "description": _extract_description(cve),
+                "source": "NIST NVD",
+            }
+        )
+    return results
 
+
+def search_cpes(keyword: str, limit: int = 5, api_key: str | None = None, timeout: int = 15) -> list[dict[str, Any]]:
+    params = {
+        "keywordSearch": keyword,
+        "resultsPerPage": str(limit),
+    }
+    url = f"{NVD_CPE_API}?{urlencode(params)}"
+    payload = _request_nvd(url, api_key=api_key, timeout=timeout)
+    results: list[dict[str, Any]] = []
+    for item in payload.get("products", []):
+        cpe = item.get("cpe", {})
+        cpe_name = cpe.get("cpeName")
+        titles = cpe.get("titles", [])
+        title = ""
+        for candidate in titles:
+            if candidate.get("lang") == "en":
+                title = candidate.get("title", "")
+                break
+        results.append({"cpeName": cpe_name, "title": title})
+    return results
+
+
+def fetch_cves_by_cpe(cpe_name: str, limit: int = 5, api_key: str | None = None, timeout: int = 15) -> list[dict[str, Any]]:
+    params = {
+        "cpeName": cpe_name,
+        "resultsPerPage": str(limit),
+    }
+    url = f"{NVD_CVE_API}?{urlencode(params)}"
+    payload = _request_nvd(url, api_key=api_key, timeout=timeout)
     results: list[dict[str, Any]] = []
     for item in payload.get("vulnerabilities", []):
         cve = item.get("cve", {})

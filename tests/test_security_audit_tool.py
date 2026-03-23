@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from security_audit_tool.inventory import map_applications_to_cves
+from security_audit_tool.models import ApplicationFinding, InstalledApplication
 from security_audit_tool.reporting import export_report_bundle, render_json_report
 from security_audit_tool.models import CheckResult, CommandResult
 from security_audit_tool.remediation import render_remediation_script
@@ -69,6 +71,23 @@ class AuditTests(unittest.TestCase):
             )
             self.assertTrue(exported["text_report"].exists())
             self.assertTrue(exported["json_report"].exists())
+
+    def test_json_report_includes_application_findings(self):
+        rule = type("Rule", (), {"identifier": "rule1", "title": "Rule", "severity": "high"})
+        report = render_json_report(
+            "linux",
+            [(rule, CheckResult(rule_id="rule1", status="pass", details="ok"))],
+            None,
+            [
+                ApplicationFinding(
+                    application=InstalledApplication(name="openssl", version="3.0.0", source="dpkg"),
+                    cpe_name="cpe:2.3:a:openssl:openssl:3.0.0:*:*:*:*:*:*:*",
+                    cves=[{"id": "CVE-2024-0001"}],
+                )
+            ],
+        )
+        payload = json.loads(report)
+        self.assertEqual(payload["application_findings"][0]["name"], "openssl")
 
 
 if __name__ == "__main__":

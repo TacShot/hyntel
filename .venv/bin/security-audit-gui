@@ -1,0 +1,6 @@
+#!/Users/hysarthak/Documents/code/hyntel/.venv/bin/python
+import sys
+from security_audit_tool.gui import main
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(main())

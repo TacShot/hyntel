@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
+from .inventory import inventory_applications, map_applications_to_cves
 from .models import CheckResult
 from .nvd import fetch_related_cves
 from .reporting import export_report_bundle, render_json_report, render_text_report
@@ -54,6 +55,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Save the final text and JSON reports to the current user's Desktop.",
     )
+    parser.add_argument(
+        "--scan-apps",
+        action="store_true",
+        help="Inventory installed applications and match their versions against NVD CVEs.",
+    )
+    parser.add_argument(
+        "--app-limit",
+        type=int,
+        default=25,
+        help="Maximum number of installed applications to inventory per run.",
+    )
     return parser
 
 
@@ -99,19 +111,27 @@ def main() -> int:
     if args.include_cves:
         _attach_cves(results, max(1, args.results_per_finding))
 
+    application_findings = None
+    if args.scan_apps:
+        applications = inventory_applications(target_os, limit=max(1, args.app_limit))
+        try:
+            application_findings = map_applications_to_cves(applications)
+        except (HTTPError, URLError, TimeoutError, OSError):
+            application_findings = []
+
     failed_results: list[CheckResult] = [result for _, result in results if result.status == "fail"]
     remediation_path = None
     if args.generate_remediation and failed_results:
         remediation_path = write_remediation_script(args.output_dir, target_os, failed_results)
 
     if args.save_to_desktop:
-        exported = export_report_bundle(target_os, results, remediation_path)
+        exported = export_report_bundle(target_os, results, remediation_path, application_findings)
         print(f"Saved reports to Desktop: {exported['text_report']}")
 
     if args.format == "json":
-        print(render_json_report(target_os, results, remediation_path), end="")
+        print(render_json_report(target_os, results, remediation_path, application_findings), end="")
     else:
-        print(render_text_report(target_os, results, remediation_path), end="")
+        print(render_text_report(target_os, results, remediation_path, application_findings), end="")
     return 0
 
 

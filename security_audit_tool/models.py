@@ -38,3 +38,17 @@ class CommandResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+@dataclass(frozen=True)
+class InstalledApplication:
+    name: str
+    version: str
+    source: str
+
+
+@dataclass
+class ApplicationFinding:
+    application: InstalledApplication
+    cpe_name: str | None
+    cves: list[dict] = field(default_factory=list)

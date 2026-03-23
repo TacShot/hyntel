@@ -11,6 +11,8 @@ Description-Content-Type: text/markdown
 
 A cross-platform command-line tool for auditing baseline system security settings on Linux, macOS, and Windows. The project evaluates common hardening controls, optionally enriches failed findings with related CVEs from the NIST National Vulnerability Database (NVD), and can generate remediation scripts for operator review.
 
+The project now includes a cross-platform GUI with a retro terminal-style interface. Every completed scan can automatically export the final report bundle to the current user's Desktop.
+
 ## Overview
 
 This project is designed to support security configuration reviews with a simple workflow:
@@ -20,6 +22,7 @@ This project is designed to support security configuration reviews with a simple
 - Flag failed or skipped controls
 - Optionally query NIST NVD for related vulnerabilities
 - Generate a remediation script for failed findings
+- Save the final report bundle to Desktop
 
 The tool is intended for security assessment and hardening support. It does not assume that a local misconfiguration directly maps to a specific CVE. CVE enrichment is best understood as related vulnerability context.
 
@@ -63,8 +66,9 @@ flowchart TD
     R --> S
     S -->|"Yes"| T["Write platform-specific remediation script"]
     S -->|"No"| U["Return report only"]
-    T --> V["Print text or JSON report"]
+    T --> V["Export text and JSON reports to Desktop"]
     U --> V
+    V --> W["Print CLI output or render GUI terminal view"]
 ```
 
 ## Project Structure
@@ -73,7 +77,11 @@ flowchart TD
 | --- | --- |
 | `setup.sh` | Bootstrap script for Linux and macOS |
 | `setup.ps1` | Bootstrap script for Windows |
+| `audit.sh` | Audit runner for Linux and macOS |
+| `audit.ps1` | Audit runner for Windows |
 | `security_audit_tool/cli.py` | CLI entry point and report rendering |
+| `security_audit_tool/gui.py` | Retro terminal-style Tkinter GUI |
+| `security_audit_tool/reporting.py` | Shared report rendering and Desktop export |
 | `security_audit_tool/system_checks.py` | OS detection and audit rules |
 | `security_audit_tool/nvd.py` | NIST NVD CVE API integration |
 | `security_audit_tool/remediation.py` | Remediation script generation |
@@ -81,7 +89,7 @@ flowchart TD
 
 ## Installation
 
-### Option 1: Bootstrap with Native Package Manager
+### Stage 1: Setup
 
 The setup scripts accept any installed Python 3 interpreter. If Python 3 is not available, they install it using the host package manager and then create a local virtual environment.
 
@@ -99,6 +107,22 @@ Supported package managers:
 
 #### Windows PowerShell
 
+If PowerShell blocks local script execution, allow the setup script first.
+
+Temporary for the current shell only:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+Persistent for the current user:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+Then run:
+
 ```powershell
 .\setup.ps1
 ```
@@ -106,6 +130,48 @@ Supported package managers:
 Supported package manager:
 
 - Windows: `winget`
+
+### Stage 2: Run the Audit
+
+After setup completes, use the dedicated audit script for your platform.
+
+#### Linux or macOS
+
+```bash
+chmod +x ./audit.sh
+./audit.sh
+```
+
+Launch the GUI:
+
+```bash
+./audit.sh --gui
+```
+
+#### Windows PowerShell
+
+If PowerShell blocks local script execution, allow the audit script first:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+```powershell
+.\audit.ps1
+```
+
+Launch the GUI:
+
+```powershell
+.\audit.ps1 --gui
+```
+
+The audit wrappers:
+
+- detect the operating system
+- run the installed Python audit program from `.venv`
+- generate remediation output
+- save the final report bundle
 
 ### Option 2: Manual Setup
 
@@ -121,53 +187,86 @@ pip install -e .
 
 #### Windows PowerShell
 
+If activation is blocked, allow local signed and local scripts for the current user:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+Then run:
+
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e .
 ```
 
+## Executables
+
+The Python package installs two executables inside the virtual environment. The new audit wrapper scripts call these for you automatically.
+
+| Executable | Interface | Purpose |
+| --- | --- | --- |
+| `security-audit` | CLI | Run audits from the terminal, use flags, and integrate with scripts or automation |
+| `security-audit-gui` | GUI | Launch the retro terminal-style desktop application for interactive use |
+
+If you want to run them directly instead of using the wrapper scripts, activate the virtual environment first:
+
+```bash
+source .venv/bin/activate
+```
+
 ## Usage
 
 ### Basic Audit
 
-Audit the current host using automatic OS detection:
+Recommended wrapper:
 
 ```bash
-security-audit
+./audit.sh
+```
+
+### Save Reports to Desktop
+
+```bash
+./audit.sh
 ```
 
 ### JSON Output
 
 ```bash
-security-audit --format json
+./audit.sh --format json
 ```
 
 ### Include Related CVEs
 
 ```bash
-security-audit --include-cves
+./audit.sh --include-cves
 ```
 
 ### Generate Remediation Script
 
 ```bash
-security-audit --generate-remediation
+./audit.sh
 ```
 
 ### Full Example
 
 ```bash
-security-audit --include-cves --generate-remediation --format json
+./audit.sh --include-cves --format json
 ```
+
+### Launch the GUI Executable
+
+```bash
+./audit.sh --gui
+```
+
+The GUI uses a retro terminal-style interface and automatically exports the final text and JSON reports to `Desktop/SecurityAuditReports/` after each completed scan.
 
 ### Explicit Target Ruleset
 
-```bash
-security-audit --target-os linux
-security-audit --target-os macos
-security-audit --target-os windows
-```
+The wrapper detects the operating system automatically. If you need explicit control, run the underlying executable directly from the virtual environment.
 
 ## Output
 
@@ -181,6 +280,12 @@ When remediation generation is enabled, the tool writes a platform-specific scri
 - Linux: `artifacts/remediate_linux.sh`
 - macOS: `artifacts/remediate_macos.sh`
 - Windows: `artifacts/remediate_windows.ps1`
+
+Report bundle export location:
+
+- Linux: `~/Desktop/SecurityAuditReports/`
+- macOS: `~/Desktop/SecurityAuditReports/`
+- Windows: `%USERPROFILE%\Desktop\SecurityAuditReports\`
 
 ## CVE Enrichment
 
@@ -201,6 +306,42 @@ Important limitations:
 - Some checks require elevated privileges to read accurate system state
 - Some remediations require administrative or root access
 - Project metadata currently supports Python `3.7+`
+
+## Troubleshooting
+
+### `./audit.sh` or `.\audit.ps1` fails
+
+The audit wrapper depends on the virtual environment created by setup. Run the setup script first:
+
+```bash
+./setup.sh
+./audit.sh
+```
+
+### `security-audit` is not found
+
+The executable is installed inside the virtual environment. Activate it first, then run the command:
+
+```bash
+source .venv/bin/activate
+security-audit --help
+```
+
+You can also run it directly without activation:
+
+```bash
+./.venv/bin/security-audit --help
+./.venv/bin/security-audit-gui
+```
+
+### `./setup.sh` fails while creating `.venv`
+
+This usually means Python 3 is installed but the `venv` module is missing. The updated setup script now attempts to install that dependency automatically. If your system still fails, install the package manually and rerun setup:
+
+```bash
+sudo apt-get install python3-venv python3-pip
+./setup.sh
+```
 
 ## Testing
 

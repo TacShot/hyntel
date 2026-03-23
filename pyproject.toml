@@ -16,7 +16,7 @@ dependencies = []
 
 [project.scripts]
 security-audit = "security_audit_tool.cli:main"
-security-audit-gui = "security_audit_tool.gui:main"
+security-audit-gui = "security_audit_tool.launcher:main"
 
 [tool.setuptools.packages.find]
 include = ["security_audit_tool*"]

@@ -106,5 +106,5 @@ $pythonCommand = Resolve-Python
 Setup-Venv $pythonCommand
 
 Write-Log "Setup complete"
-Write-Log "Activate with: .\.venv\Scripts\Activate.ps1"
-Write-Log "Run with: security-audit --help"
+Write-Log "Run audits with: .\audit.ps1"
+Write-Log "Launch GUI with: .\audit.ps1 --gui"

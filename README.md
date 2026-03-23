@@ -68,6 +68,8 @@ flowchart TD
 | --- | --- |
 | `setup.sh` | Bootstrap script for Linux and macOS |
 | `setup.ps1` | Bootstrap script for Windows |
+| `audit.sh` | Audit runner for Linux and macOS |
+| `audit.ps1` | Audit runner for Windows |
 | `security_audit_tool/cli.py` | CLI entry point and report rendering |
 | `security_audit_tool/gui.py` | Retro terminal-style Tkinter GUI |
 | `security_audit_tool/reporting.py` | Shared report rendering and Desktop export |
@@ -78,7 +80,7 @@ flowchart TD
 
 ## Installation
 
-### Option 1: Bootstrap with Native Package Manager
+### Stage 1: Setup
 
 The setup scripts accept any installed Python 3 interpreter. If Python 3 is not available, they install it using the host package manager and then create a local virtual environment.
 
@@ -120,6 +122,58 @@ Supported package manager:
 
 - Windows: `winget`
 
+### Stage 2: Run the Audit
+
+After setup completes, use the dedicated audit script for your platform.
+
+#### Linux or macOS
+
+```bash
+chmod +x ./audit.sh
+./audit.sh
+```
+
+`audit.sh` opens an interactive step menu. Enter:
+
+- `1` to print the detected OS
+- `2` to run the configuration audit and create a report
+- `3` to run the configuration audit with CVE lookup
+- `4` to run the installed application CVE scan
+- `5` to launch the GUI
+- `full` to run the whole audit flow
+- `0` to exit
+
+Launch the GUI:
+
+```bash
+./audit.sh --gui
+```
+
+#### Windows PowerShell
+
+If PowerShell blocks local script execution, allow the audit script first:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+```powershell
+.\audit.ps1
+```
+
+Launch the GUI:
+
+```powershell
+.\audit.ps1 --gui
+```
+
+The audit wrappers:
+
+- detect the operating system
+- run the installed Python audit program from `.venv`
+- generate remediation output
+- save the final report bundle
+
 ### Option 2: Manual Setup
 
 If Python 3 is already installed, the project can be installed manually.
@@ -150,68 +204,80 @@ pip install -e .
 
 ## Executables
 
-The project installs two executables so users can run either interface directly after setup.
+The Python package installs two executables inside the virtual environment. The new audit wrapper scripts call these for you automatically.
 
 | Executable | Interface | Purpose |
 | --- | --- | --- |
 | `security-audit` | CLI | Run audits from the terminal, use flags, and integrate with scripts or automation |
 | `security-audit-gui` | GUI | Launch the retro terminal-style desktop application for interactive use |
 
+If you want to run them directly instead of using the wrapper scripts, activate the virtual environment first:
+
+```bash
+source .venv/bin/activate
+```
+
 ## Usage
 
 ### Basic Audit
 
-Audit the current host using automatic OS detection:
+Recommended wrapper:
 
 ```bash
-security-audit
+./audit.sh
 ```
 
 ### Save Reports to Desktop
 
 ```bash
-security-audit --save-to-desktop
+./audit.sh
 ```
 
 ### JSON Output
 
 ```bash
-security-audit --format json
+./audit.sh --format json
 ```
 
 ### Include Related CVEs
 
 ```bash
-security-audit --include-cves
+./audit.sh --include-cves
 ```
+
+### Scan Installed Applications for CVEs
+
+```bash
+./audit.sh --scan-apps
+```
+
+This inventories installed applications from the local package manager or operating-system registry, derives candidate CPE matches from NVD, and then queries CVEs tied to the matched product/version.
 
 ### Generate Remediation Script
 
 ```bash
-security-audit --generate-remediation
+./audit.sh
 ```
 
 ### Full Example
 
 ```bash
-security-audit --include-cves --generate-remediation --format json
+./audit.sh --include-cves --scan-apps --format json
 ```
 
 ### Launch the GUI Executable
 
 ```bash
-security-audit-gui
+./audit.sh --gui
 ```
 
 The GUI uses a retro terminal-style interface and automatically exports the final text and JSON reports to `Desktop/SecurityAuditReports/` after each completed scan.
 
+On systems where the native Tk GUI cannot start, the launcher falls back to a terminal-based retro interface instead of aborting.
+
 ### Explicit Target Ruleset
 
-```bash
-security-audit --target-os linux
-security-audit --target-os macos
-security-audit --target-os windows
-```
+The wrapper detects the operating system automatically. If you need explicit control, run the underlying executable directly from the virtual environment.
 
 ## Output
 
@@ -244,6 +310,7 @@ Important limitations:
 - CVE matching is heuristic and keyword-based
 - Returned CVEs are related security context, not definitive proof that the host is vulnerable
 - Network access is required when `--include-cves` is enabled
+- Installed application matching depends on package naming, CPE quality, and version normalization; some applications may not map cleanly
 
 ## Security and Operational Notes
 
@@ -251,6 +318,42 @@ Important limitations:
 - Some checks require elevated privileges to read accurate system state
 - Some remediations require administrative or root access
 - Project metadata currently supports Python `3.7+`
+
+## Troubleshooting
+
+### `./audit.sh` or `.\audit.ps1` fails
+
+The audit wrapper depends on the virtual environment created by setup. Run the setup script first:
+
+```bash
+./setup.sh
+./audit.sh
+```
+
+### `security-audit` is not found
+
+The executable is installed inside the virtual environment. Activate it first, then run the command:
+
+```bash
+source .venv/bin/activate
+security-audit --help
+```
+
+You can also run it directly without activation:
+
+```bash
+./.venv/bin/security-audit --help
+./.venv/bin/security-audit-gui
+```
+
+### `./setup.sh` fails while creating `.venv`
+
+This usually means Python 3 is installed but the `venv` module is missing. The updated setup script now attempts to install that dependency automatically. If your system still fails, install the package manually and rerun setup:
+
+```bash
+sudo apt-get install python3-venv python3-pip
+./setup.sh
+```
 
 ## Testing
 

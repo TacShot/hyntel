@@ -5,6 +5,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+from .models import ApplicationFinding
+
 
 def summarize_results(results: list[tuple]) -> dict[str, int]:
     return {
@@ -14,7 +16,12 @@ def summarize_results(results: list[tuple]) -> dict[str, int]:
     }
 
 
-def render_text_report(target_os: str, results: list[tuple], remediation_path: Path | None) -> str:
+def render_text_report(
+    target_os: str,
+    results: list[tuple],
+    remediation_path: Path | None,
+    application_findings: list[ApplicationFinding] | None = None,
+) -> str:
     summary = summarize_results(results)
     lines = [f"Security audit report for {target_os}", ""]
     lines.append(f"Summary: {summary['passed']} passed, {summary['failed']} failed, {summary['skipped']} skipped")
@@ -36,12 +43,38 @@ def render_text_report(target_os: str, results: list[tuple], remediation_path: P
                 if cve.get("description"):
                     lines.append(f"      {cve['description']}")
         lines.append("")
+    if application_findings is not None:
+        lines.append("Installed Application CVE Review")
+        lines.append("")
+        if application_findings:
+            for finding in application_findings:
+                app = finding.application
+                lines.append(f"[APP] {app.name} {app.version} ({app.source})")
+                if finding.cpe_name:
+                    lines.append(f"  CPE: {finding.cpe_name}")
+                for cve in finding.cves:
+                    cve_id = cve.get("id") or "lookup-unavailable"
+                    severity = cve.get("severity") or "unknown"
+                    score = cve.get("score")
+                    score_text = f", score {score}" if score is not None else ""
+                    lines.append(f"  - {cve_id} ({severity}{score_text})")
+                    if cve.get("description"):
+                        lines.append(f"    {cve['description']}")
+                lines.append("")
+        else:
+            lines.append("No application CVE matches found or application inventory was not requested.")
+            lines.append("")
     if remediation_path:
         lines.append(f"Remediation script: {remediation_path}")
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_json_report(target_os: str, results: list[tuple], remediation_path: Path | None) -> str:
+def render_json_report(
+    target_os: str,
+    results: list[tuple],
+    remediation_path: Path | None,
+    application_findings: list[ApplicationFinding] | None = None,
+) -> str:
     payload = {
         "target_os": target_os,
         "summary": summarize_results(results),
@@ -59,6 +92,16 @@ def render_json_report(target_os: str, results: list[tuple], remediation_path: P
             for rule, result in results
         ],
         "remediation_script": str(remediation_path) if remediation_path else None,
+        "application_findings": [
+            {
+                "name": finding.application.name,
+                "version": finding.application.version,
+                "source": finding.application.source,
+                "cpe_name": finding.cpe_name,
+                "cves": finding.cves,
+            }
+            for finding in (application_findings or [])
+        ],
     }
     return json.dumps(payload, indent=2) + "\n"
 
@@ -75,6 +118,7 @@ def export_report_bundle(
     target_os: str,
     results: list[tuple],
     remediation_path: Path | None,
+    application_findings: list[ApplicationFinding] | None = None,
     desktop_base: Path | None = None,
 ) -> dict[str, Path]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -89,8 +133,8 @@ def export_report_bundle(
     text_path = base_dir / f"security_audit_{target_os}_{timestamp}.txt"
     json_path = base_dir / f"security_audit_{target_os}_{timestamp}.json"
 
-    text_path.write_text(render_text_report(target_os, results, remediation_path), encoding="utf-8")
-    json_path.write_text(render_json_report(target_os, results, remediation_path), encoding="utf-8")
+    text_path.write_text(render_text_report(target_os, results, remediation_path, application_findings), encoding="utf-8")
+    json_path.write_text(render_json_report(target_os, results, remediation_path, application_findings), encoding="utf-8")
 
     exported = {
         "text_report": text_path,

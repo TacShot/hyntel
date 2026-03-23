@@ -52,27 +52,49 @@ detect_os() {
   esac
 }
 
+python_has_module() {
+  local python_cmd="$1"
+  local module_name="$2"
+  "$python_cmd" -c "import ${module_name}" >/dev/null 2>&1
+}
+
 install_python_linux() {
   if resolve_python >/dev/null 2>&1; then
     log "Python 3 already installed"
-    return
-  fi
-
-  if has_command apt-get; then
+  elif has_command apt-get; then
     log "Installing Python with apt"
     require_sudo apt-get update
     require_sudo apt-get install -y python3 python3-pip python3-venv
     return
-  fi
-
-  if has_command pacman; then
+  elif has_command pacman; then
     log "Installing Python with pacman"
     require_sudo pacman -Sy --noconfirm python python-pip
     return
+  else
+    echo "No supported Linux package manager found. Expected apt-get or pacman." >&2
+    exit 1
   fi
 
-  echo "No supported Linux package manager found. Expected apt-get or pacman." >&2
-  exit 1
+  if has_command apt-get; then
+    local python_cmd
+    python_cmd="$(resolve_python)"
+    if ! python_has_module "$python_cmd" venv; then
+      log "Installing missing venv support with apt"
+      require_sudo apt-get update
+      require_sudo apt-get install -y python3-venv python3-pip
+    fi
+    return
+  fi
+
+  if has_command pacman; then
+    local python_cmd
+    python_cmd="$(resolve_python)"
+    if ! python_has_module "$python_cmd" venv; then
+      log "Refreshing Python packages with pacman to restore venv support"
+      require_sudo pacman -Sy --noconfirm python python-pip
+    fi
+    return
+  fi
 }
 
 install_python_macos() {
@@ -96,13 +118,39 @@ ensure_pip() {
     return
   fi
   log "Bootstrapping pip"
-  "$python_cmd" -m ensurepip --upgrade
+  if "$python_cmd" -m ensurepip --upgrade >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ "$(detect_os)" == "linux" ]] && has_command apt-get; then
+    log "Installing pip with apt"
+    require_sudo apt-get update
+    require_sudo apt-get install -y python3-pip python3-venv
+    return
+  fi
+
+  if [[ "$(detect_os)" == "linux" ]] && has_command pacman; then
+    log "Installing pip with pacman"
+    require_sudo pacman -Sy --noconfirm python-pip
+    return
+  fi
+
+  echo "Could not bootstrap pip for the detected Python 3 interpreter." >&2
+  exit 1
 }
 
 setup_virtualenv() {
   local python_cmd="$1"
   log "Creating virtual environment in ${ROOT_DIR}/.venv"
-  "$python_cmd" -m venv "${ROOT_DIR}/.venv"
+  if ! "$python_cmd" -m venv "${ROOT_DIR}/.venv"; then
+    echo "Failed to create the virtual environment. Make sure Python 3 includes the venv module." >&2
+    exit 1
+  fi
+  if [[ ! -x "${ROOT_DIR}/.venv/bin/python" ]]; then
+    echo "Virtual environment creation did not produce ${ROOT_DIR}/.venv/bin/python." >&2
+    echo "On Debian/Ubuntu, install python3-venv and rerun ./setup.sh." >&2
+    exit 1
+  fi
   log "Installing project in editable mode"
   "${ROOT_DIR}/.venv/bin/python" -m pip install --upgrade pip
   "${ROOT_DIR}/.venv/bin/python" -m pip install -e "${ROOT_DIR}"
@@ -127,8 +175,8 @@ main() {
   setup_virtualenv "$python_cmd"
 
   log "Setup complete"
-  log "Activate with: source ${ROOT_DIR}/.venv/bin/activate"
-  log "Run with: security-audit --help"
+  log "Run audits with: ./audit.sh"
+  log "Launch GUI with: ./audit.sh --gui"
 }
 
 main "$@"

@@ -7,6 +7,7 @@ from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 
 from .cli import _attach_cves
+from .inventory import inventory_applications, map_applications_to_cves
 from .models import CheckResult
 from .reporting import export_report_bundle, render_text_report
 from .remediation import write_remediation_script
@@ -33,11 +34,13 @@ class SecurityAuditGUI:
         self.current_results: list[tuple] = []
         self.current_target_os: str | None = None
         self.current_remediation_path: Path | None = None
+        self.current_application_findings = None
         self.current_export_paths: dict[str, Path] = {}
 
         self.target_os_var = tk.StringVar(value="auto")
         self.include_cves_var = tk.BooleanVar(value=False)
         self.generate_remediation_var = tk.BooleanVar(value=True)
+        self.scan_apps_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="READY")
         self.export_var = tk.StringVar(value="Desktop export: pending")
 
@@ -120,9 +123,15 @@ class SecurityAuditGUI:
             variable=self.generate_remediation_var,
             style="Retro.TCheckbutton",
         ).grid(row=2, column=2, columnspan=2, sticky="w", pady=4)
+        ttk.Checkbutton(
+            control_panel,
+            text="SCAN INSTALLED APPS FOR CVES",
+            variable=self.scan_apps_var,
+            style="Retro.TCheckbutton",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=4)
 
         button_row = ttk.Frame(control_panel, style="Panel.TFrame", padding=0)
-        button_row.grid(row=3, column=0, columnspan=4, sticky="w", pady=(14, 4))
+        button_row.grid(row=4, column=0, columnspan=4, sticky="w", pady=(14, 4))
         ttk.Button(button_row, text="RUN AUDIT", style="Retro.TButton", command=self._start_audit).pack(side="left", padx=(0, 10))
         ttk.Button(button_row, text="SAVE REPORTS AGAIN", style="Retro.TButton", command=self._save_reports_again).pack(side="left")
 
@@ -160,6 +169,7 @@ class SecurityAuditGUI:
         self._append_output(f"BOOT> Target OS mode: {self.target_os_var.get()}\n")
         self._append_output(f"BOOT> Include CVEs: {self.include_cves_var.get()}\n")
         self._append_output(f"BOOT> Generate remediation: {self.generate_remediation_var.get()}\n\n")
+        self._append_output(f"BOOT> Scan installed apps: {self.scan_apps_var.get()}\n\n")
 
         worker = threading.Thread(target=self._run_audit_worker, daemon=True)
         worker.start()
@@ -175,14 +185,20 @@ class SecurityAuditGUI:
                 self.result_queue.put(("log", "NET> Querying related CVEs from NIST NVD where applicable...\n"))
                 _attach_cves(results, 3)
 
+            application_findings = None
+            if self.scan_apps_var.get():
+                self.result_queue.put(("log", "INV> Inventorying installed applications and matching NVD CVEs...\n"))
+                applications = inventory_applications(target_os, limit=25)
+                application_findings = map_applications_to_cves(applications)
+
             failed_results: list[CheckResult] = [result for _, result in results if result.status == "fail"]
             remediation_path = None
             if self.generate_remediation_var.get() and failed_results:
                 remediation_path = write_remediation_script(Path("artifacts"), target_os, failed_results)
                 self.result_queue.put(("log", f"FIX> Remediation script generated at {remediation_path}\n"))
 
-            exports = export_report_bundle(target_os, results, remediation_path)
-            self.result_queue.put(("done", (target_os, results, remediation_path, exports)))
+            exports = export_report_bundle(target_os, results, remediation_path, application_findings)
+            self.result_queue.put(("done", (target_os, results, remediation_path, application_findings, exports)))
         except Exception as exc:  # pragma: no cover - GUI fallback path
             self.result_queue.put(("error", str(exc)))
 
@@ -197,15 +213,16 @@ class SecurityAuditGUI:
                     self._append_output(f"ERR> {payload}\n")
                     messagebox.showerror("Security Audit Terminal", str(payload))
                 elif kind == "done":
-                    target_os, results, remediation_path, exports = payload
+                    target_os, results, remediation_path, application_findings, exports = payload
                     self.current_target_os = target_os
                     self.current_results = results
                     self.current_remediation_path = remediation_path
+                    self.current_application_findings = application_findings
                     self.current_export_paths = exports
                     self.status_var.set("COMPLETE")
                     self.export_var.set(f"Desktop export: {exports['text_report'].parent}")
                     self._append_output("SYS> Audit complete.\n\n")
-                    self._append_output(render_text_report(target_os, results, remediation_path))
+                    self._append_output(render_text_report(target_os, results, remediation_path, application_findings))
                     self._append_output("\nEXPORT> Saved text report to Desktop.\n")
                     self._append_output(f"EXPORT> {exports['text_report']}\n")
                     self._append_output(f"EXPORT> {exports['json_report']}\n")
@@ -217,7 +234,12 @@ class SecurityAuditGUI:
         if not self.current_results or not self.current_target_os:
             messagebox.showinfo("Security Audit Terminal", "Run an audit before exporting reports.")
             return
-        exports = export_report_bundle(self.current_target_os, self.current_results, self.current_remediation_path)
+        exports = export_report_bundle(
+            self.current_target_os,
+            self.current_results,
+            self.current_remediation_path,
+            self.current_application_findings,
+        )
         self.current_export_paths = exports
         self.export_var.set(f"Desktop export: {exports['text_report'].parent}")
         self._append_output("\nEXPORT> Saved another report bundle to Desktop.\n")
