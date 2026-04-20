@@ -1,0 +1,22 @@
+{
+  "target_os": "linux",
+  "summary": {
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0
+  },
+  "results": [
+    {
+      "rule_id": "rule1",
+      "title": "Rule One",
+      "severity": "high",
+      "status": "pass",
+      "details": "ok",
+      "observed_value": null,
+      "remediation": [],
+      "related_cves": []
+    }
+  ],
+  "remediation_script": null,
+  "application_findings": []
+}

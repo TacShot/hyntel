@@ -177,6 +177,13 @@ main() {
   log "Setup complete"
   log "Run audits with: ./audit.sh"
   log "Launch GUI with: ./audit.sh --gui"
+  log ""
+  log "To use the 'security-audit' CLI directly, activate the virtual environment first:"
+  log "  source .venv/bin/activate"
+  log "  security-audit --help"
+  log ""
+  log "Or invoke it without activation using its full path:"
+  log "  ./.venv/bin/security-audit --help"
 }
 
 main "$@"

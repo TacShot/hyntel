@@ -1,0 +1,7 @@
+Security audit report for linux
+
+Summary: 1 passed, 0 failed, 0 skipped
+
+[PASS] Rule One (high)
+  Rule ID: rule1
+  Details: ok
