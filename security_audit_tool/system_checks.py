@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import platform
 import shutil
 import subprocess
 from dataclasses import replace
 
-from .models import AuditRule, CVEQuery, CheckResult, CommandResult
+from .models import AuditRule, CVEQuery, CheckResult, CommandResult, DriverInfo, OsInfo
 
 
 class CommandRunner:
@@ -38,6 +39,60 @@ def detect_platform() -> str:
     if system == "linux":
         return "linux"
     return "unknown"
+
+
+def _detect_linux_os_info() -> OsInfo:
+    name = "Linux"
+    version = "unknown"
+    try:
+        with open("/etc/os-release") as fh:
+            data: dict[str, str] = {}
+            for line in fh:
+                line = line.strip()
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    data[k] = v.strip('"')
+        name = data.get("NAME", "Linux")
+        version = data.get("VERSION", data.get("VERSION_ID", "unknown"))
+    except OSError:
+        version = platform.release()
+    kernel = platform.release()
+    return OsInfo(name=name, version=version, kernel=kernel)
+
+
+def _detect_macos_os_info() -> OsInfo:
+    ver_tuple = platform.mac_ver()
+    version = ver_tuple[0] or platform.release()
+    build = ver_tuple[1][0] if ver_tuple[1] and ver_tuple[1][0] else None
+    return OsInfo(name="macOS", version=version, build=build)
+
+
+def _detect_windows_os_info(runner: "CommandRunner | None" = None) -> OsInfo:
+    win_ver = platform.win32_ver()
+    name = f"Windows {win_ver[0]}" if win_ver[0] else "Windows"
+    version = win_ver[1] or platform.version()
+    build = win_ver[1] or None
+    patches: list[str] = []
+    active_runner = runner or CommandRunner()
+    patch_result = _powershell(
+        active_runner,
+        "Get-HotFix | Select-Object -ExpandProperty HotFixID | Sort-Object",
+    )
+    if patch_result.returncode == 0 and patch_result.stdout.strip():
+        patches = [ln.strip() for ln in patch_result.stdout.splitlines() if ln.strip()]
+    return OsInfo(name=name, version=version, build=build, security_patches=patches)
+
+
+def detect_os_info(runner: "CommandRunner | None" = None) -> OsInfo:
+    """Return OS name, version, build and (on Windows) installed security patches."""
+    system = platform.system().lower()
+    if system == "linux":
+        return _detect_linux_os_info()
+    if system == "darwin":
+        return _detect_macos_os_info()
+    if system == "windows":
+        return _detect_windows_os_info(runner)
+    return OsInfo(name=platform.system() or "unknown", version=platform.version())
 
 
 def _pass_result(rule_id: str, details: str, observed: str | None = None) -> CheckResult:
@@ -216,6 +271,103 @@ def _windows_defender_realtime(runner: CommandRunner) -> CheckResult:
     return _fail_result("windows_defender_realtime_enabled", "Microsoft Defender real-time monitoring is disabled.", output or result.stderr)
 
 
+def _classify_driver(is_signed: bool, signer: str | None) -> tuple[str, bool, bool]:
+    """Return (sign_type, is_suspicious, is_dangerous) for a driver."""
+    if not is_signed or not signer:
+        return "unsigned", True, True
+    signer_lower = signer.lower()
+    if "microsoft" in signer_lower or "windows" in signer_lower:
+        return "microsoft", False, False
+    # Third-party / custom-signed driver
+    return "custom", True, False
+
+
+def get_windows_drivers(runner: CommandRunner) -> list[DriverInfo]:
+    """Query WMI for PnP driver signing information and return structured results."""
+    script = (
+        "Get-WmiObject Win32_PnPSignedDriver "
+        "| Where-Object { $_.DeviceName } "
+        "| Select-Object DeviceName, DriverProviderName, IsSigned, Signer, InfName "
+        "| ConvertTo-Json -Compress -Depth 2"
+    )
+    result = _powershell(runner, script)
+    if result.returncode == 127 or not result.stdout.strip():
+        return []
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, dict):
+        payload = [payload]
+    drivers: list[DriverInfo] = []
+    for item in payload:
+        name = str(item.get("DeviceName") or "").strip()
+        provider = str(item.get("DriverProviderName") or "").strip()
+        is_signed = bool(item.get("IsSigned"))
+        signer = str(item.get("Signer") or "").strip() or None
+        inf_name = str(item.get("InfName") or "").strip() or None
+        sign_type, is_suspicious, is_dangerous = _classify_driver(is_signed, signer)
+        drivers.append(
+            DriverInfo(
+                name=name,
+                provider=provider,
+                signer=signer,
+                sign_type=sign_type,
+                is_signed=is_signed,
+                is_suspicious=is_suspicious,
+                is_dangerous=is_dangerous,
+                inf_name=inf_name,
+            )
+        )
+    return drivers
+
+
+def _windows_driver_check(runner: CommandRunner) -> CheckResult:
+    result = _powershell(
+        runner,
+        "Get-WmiObject Win32_PnPSignedDriver | Where-Object { $_.DeviceName } | Measure-Object | Select-Object -ExpandProperty Count",
+    )
+    if result.returncode == 127:
+        return _skip_result("windows_driver_signing", "powershell.exe is not available.")
+
+    drivers = get_windows_drivers(runner)
+    if not drivers:
+        return _skip_result("windows_driver_signing", "No driver signing data could be retrieved.")
+
+    dangerous = [d for d in drivers if d.is_dangerous]
+    suspicious = [d for d in drivers if d.is_suspicious and not d.is_dangerous]
+    total = len(drivers)
+
+    parts: list[str] = [f"Total drivers: {total}."]
+    if dangerous:
+        names = ", ".join(d.name for d in dangerous[:5])
+        parts.append(f"DANGEROUS (unsigned) [{len(dangerous)}]: {names}{'...' if len(dangerous) > 5 else ''}.")
+    if suspicious:
+        names = ", ".join(d.name for d in suspicious[:5])
+        parts.append(f"Suspicious (custom-signed) [{len(suspicious)}]: {names}{'...' if len(suspicious) > 5 else ''}.")
+
+    details_str = " ".join(parts)
+
+    if dangerous:
+        return _fail_result(
+            "windows_driver_signing",
+            details_str,
+            f"{len(dangerous)} unsigned, {len(suspicious)} custom-signed out of {total}",
+        )
+    if suspicious:
+        return CheckResult(
+            rule_id="windows_driver_signing",
+            status="warn",
+            details=details_str,
+            observed_value=f"0 unsigned, {len(suspicious)} custom-signed out of {total}",
+        )
+    return _pass_result(
+        "windows_driver_signing",
+        f"All {total} drivers are Microsoft/WHQL-signed.",
+        f"0 unsigned, 0 custom-signed out of {total}",
+    )
+
+
 RULES: list[AuditRule] = [
     AuditRule(
         identifier="linux_firewall_enabled",
@@ -376,6 +528,21 @@ RULES: list[AuditRule] = [
             "Set-MpPreference -DisableRealtimeMonitoring $false",
         ],
         cve_queries=[CVEQuery(keyword="Microsoft Defender bypass vulnerability malware")],
+    ),
+    AuditRule(
+        identifier="windows_driver_signing",
+        platform="windows",
+        title="Windows driver signing verification",
+        description="Check all installed PnP drivers for valid signatures.",
+        rationale="Unsigned or improperly signed drivers can be exploited for kernel-level code execution.",
+        severity="critical",
+        check=_windows_driver_check,
+        remediation=[
+            "Run: Get-WmiObject Win32_PnPSignedDriver | Where-Object { -not $_.IsSigned } | Select-Object DeviceName, InfName",
+            "Identify and remove or update any unsigned drivers.",
+            "Enable Secure Boot and Driver Signature Enforcement via bcdedit /set nointegritychecks off",
+        ],
+        cve_queries=[CVEQuery(keyword="Windows unsigned driver privilege escalation kernel exploit")],
     ),
 ]
 

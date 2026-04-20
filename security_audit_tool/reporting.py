@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from .models import ApplicationFinding
+from .models import ApplicationFinding, InstalledApplication, OsInfo
 
 
 def summarize_results(results: list[tuple]) -> dict[str, int]:
@@ -21,9 +21,25 @@ def render_text_report(
     results: list[tuple],
     remediation_path: Path | None,
     application_findings: list[ApplicationFinding] | None = None,
+    scanned_applications: list[InstalledApplication] | None = None,
+    os_info: OsInfo | None = None,
 ) -> str:
     summary = summarize_results(results)
     lines = [f"Security audit report for {target_os}", ""]
+
+    if os_info is not None:
+        lines.append(f"OS        : {os_info.name}")
+        lines.append(f"Version   : {os_info.version}")
+        if os_info.build:
+            lines.append(f"Build     : {os_info.build}")
+        if os_info.kernel:
+            lines.append(f"Kernel    : {os_info.kernel}")
+        if os_info.security_patches:
+            lines.append(f"Security patches ({len(os_info.security_patches)} installed):")
+            for kb in os_info.security_patches:
+                lines.append(f"  {kb}")
+        lines.append("")
+
     lines.append(f"Summary: {summary['passed']} passed, {summary['failed']} failed, {summary['skipped']} skipped")
     lines.append("")
     for rule, result in results:
@@ -43,6 +59,17 @@ def render_text_report(
                 if cve.get("description"):
                     lines.append(f"      {cve['description']}")
         lines.append("")
+
+    if scanned_applications is not None:
+        lines.append(f"Installed Applications Scanned ({len(scanned_applications)} total)")
+        lines.append("")
+        if scanned_applications:
+            for app in scanned_applications:
+                lines.append(f"  {app.name}  {app.version}  ({app.source})")
+        else:
+            lines.append("  No applications found.")
+        lines.append("")
+
     if application_findings is not None:
         lines.append("Installed Application CVE Review")
         lines.append("")
@@ -74,8 +101,10 @@ def render_json_report(
     results: list[tuple],
     remediation_path: Path | None,
     application_findings: list[ApplicationFinding] | None = None,
+    scanned_applications: list[InstalledApplication] | None = None,
+    os_info: OsInfo | None = None,
 ) -> str:
-    payload = {
+    payload: dict = {
         "target_os": target_os,
         "summary": summarize_results(results),
         "results": [
@@ -103,6 +132,19 @@ def render_json_report(
             for finding in (application_findings or [])
         ],
     }
+    if os_info is not None:
+        payload["os_info"] = {
+            "name": os_info.name,
+            "version": os_info.version,
+            "build": os_info.build,
+            "kernel": os_info.kernel,
+            "security_patches": os_info.security_patches,
+        }
+    if scanned_applications is not None:
+        payload["scanned_applications"] = [
+            {"name": app.name, "version": app.version, "source": app.source}
+            for app in scanned_applications
+        ]
     return json.dumps(payload, indent=2) + "\n"
 
 
@@ -120,6 +162,8 @@ def export_report_bundle(
     remediation_path: Path | None,
     application_findings: list[ApplicationFinding] | None = None,
     desktop_base: Path | None = None,
+    scanned_applications: list[InstalledApplication] | None = None,
+    os_info: OsInfo | None = None,
 ) -> dict[str, Path]:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     preferred_base = (desktop_base or desktop_dir()) / "SecurityAuditReports"
@@ -133,8 +177,14 @@ def export_report_bundle(
     text_path = base_dir / f"security_audit_{target_os}_{timestamp}.txt"
     json_path = base_dir / f"security_audit_{target_os}_{timestamp}.json"
 
-    text_path.write_text(render_text_report(target_os, results, remediation_path, application_findings), encoding="utf-8")
-    json_path.write_text(render_json_report(target_os, results, remediation_path, application_findings), encoding="utf-8")
+    text_path.write_text(
+        render_text_report(target_os, results, remediation_path, application_findings, scanned_applications, os_info),
+        encoding="utf-8",
+    )
+    json_path.write_text(
+        render_json_report(target_os, results, remediation_path, application_findings, scanned_applications, os_info),
+        encoding="utf-8",
+    )
 
     exported = {
         "text_report": text_path,
