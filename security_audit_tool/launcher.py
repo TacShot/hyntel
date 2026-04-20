@@ -5,12 +5,28 @@ import sys
 
 
 def _tk_probe() -> bool:
+    """Return True only when tkinter can open a real display window."""
     probe = [
         sys.executable,
         "-c",
-        "import tkinter as tk; root=tk.Tk(); root.withdraw(); root.update(); root.destroy()",
+        (
+            "import tkinter as tk; "
+            "root = tk.Tk(); "
+            "root.withdraw(); "
+            "root.update(); "
+            "root.destroy()"
+        ),
     ]
-    completed = subprocess.run(probe, capture_output=True, text=True, check=False)
+    try:
+        completed = subprocess.run(
+            probe,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
     return completed.returncode == 0
 
 

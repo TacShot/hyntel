@@ -52,3 +52,29 @@ class ApplicationFinding:
     application: InstalledApplication
     cpe_name: str | None
     cves: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class OsInfo:
+    """Detected operating system information for the current host."""
+
+    name: str
+    version: str
+    build: str | None = None
+    kernel: str | None = None
+    security_patches: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DriverInfo:
+    """Information about a single device driver's signing status."""
+
+    name: str
+    provider: str
+    signer: str | None
+    # "microsoft" | "whql" | "custom" | "unsigned"
+    sign_type: str
+    is_signed: bool
+    is_suspicious: bool
+    is_dangerous: bool
+    inf_name: str | None = None

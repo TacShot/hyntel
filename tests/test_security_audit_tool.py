@@ -47,10 +47,13 @@ from security_audit_tool.system_checks import (
     _macos_remote_login,
     _windows_bitlocker,
     _windows_defender_realtime,
+    _windows_driver_check,
     _windows_firewall,
     _windows_rdp,
+    detect_os_info,
     detect_platform,
     get_rules,
+    get_windows_drivers,
     run_audit,
 )
 
@@ -518,12 +521,13 @@ class TestGetRulesAndRunAudit(unittest.TestCase):
 
     def test_windows_rules_count(self):
         rules = get_rules("windows")
-        self.assertEqual(len(rules), 4)
+        self.assertEqual(len(rules), 5)
         ids = {r.identifier for r in rules}
         self.assertIn("windows_firewall_enabled", ids)
         self.assertIn("windows_bitlocker_enabled", ids)
         self.assertIn("windows_rdp_disabled", ids)
         self.assertIn("windows_defender_realtime_enabled", ids)
+        self.assertIn("windows_driver_signing", ids)
 
     def test_unknown_platform_returns_empty(self):
         self.assertEqual(get_rules("freebsd"), [])
@@ -1555,3 +1559,183 @@ class TestCliMain(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+# ---------------------------------------------------------------------------
+# system_checks – Windows driver signing
+# ---------------------------------------------------------------------------
+
+_WIN_DRV_QUERY = _PS_FLAGS + (
+    "Get-WmiObject Win32_PnPSignedDriver "
+    "| Where-Object { $_.DeviceName } "
+    "| Select-Object DeviceName, DriverProviderName, IsSigned, Signer, InfName "
+    "| ConvertTo-Json -Compress -Depth 2",
+)
+
+_WIN_DRV_COUNT_CMD = _PS_FLAGS + (
+    "Get-WmiObject Win32_PnPSignedDriver | Where-Object { $_.DeviceName } | Measure-Object | Select-Object -ExpandProperty Count",
+)
+
+
+class TestGetWindowsDrivers(unittest.TestCase):
+    def _runner(self, stdout, returncode=0):
+        return FakeRunner(outputs={_WIN_DRV_QUERY: CommandResult(returncode, stdout, "")})
+
+    def test_microsoft_signed_driver(self):
+        payload = '[{"DeviceName":"Network Adapter","DriverProviderName":"Microsoft","IsSigned":true,"Signer":"Microsoft Windows","InfName":"net.inf"}]'
+        drivers = get_windows_drivers(self._runner(payload))
+        self.assertEqual(len(drivers), 1)
+        self.assertEqual(drivers[0].sign_type, "microsoft")
+        self.assertFalse(drivers[0].is_suspicious)
+        self.assertFalse(drivers[0].is_dangerous)
+
+    def test_unsigned_driver(self):
+        payload = '[{"DeviceName":"Unknown Device","DriverProviderName":"SomeCo","IsSigned":false,"Signer":null,"InfName":"bad.inf"}]'
+        drivers = get_windows_drivers(self._runner(payload))
+        self.assertEqual(len(drivers), 1)
+        self.assertEqual(drivers[0].sign_type, "unsigned")
+        self.assertTrue(drivers[0].is_dangerous)
+        self.assertTrue(drivers[0].is_suspicious)
+
+    def test_custom_signed_driver(self):
+        payload = '[{"DeviceName":"GPU Driver","DriverProviderName":"NvidiaComp","IsSigned":true,"Signer":"NVIDIA Corporation","InfName":"nvgpu.inf"}]'
+        drivers = get_windows_drivers(self._runner(payload))
+        self.assertEqual(len(drivers), 1)
+        self.assertEqual(drivers[0].sign_type, "custom")
+        self.assertTrue(drivers[0].is_suspicious)
+        self.assertFalse(drivers[0].is_dangerous)
+
+    def test_single_object_wrapped_in_list(self):
+        payload = '{"DeviceName":"USB Hub","DriverProviderName":"Microsoft","IsSigned":true,"Signer":"Microsoft Windows","InfName":"usb.inf"}'
+        drivers = get_windows_drivers(self._runner(payload))
+        self.assertEqual(len(drivers), 1)
+
+    def test_powershell_unavailable(self):
+        runner = FakeRunner(outputs={_WIN_DRV_QUERY: CommandResult(127, "", "command not found")})
+        drivers = get_windows_drivers(runner)
+        self.assertEqual(drivers, [])
+
+    def test_invalid_json(self):
+        drivers = get_windows_drivers(self._runner("not-json"))
+        self.assertEqual(drivers, [])
+
+    def test_empty_output(self):
+        drivers = get_windows_drivers(self._runner(""))
+        self.assertEqual(drivers, [])
+
+
+class TestWindowsDriverCheck(unittest.TestCase):
+    def _runner(self, drv_stdout="", count_stdout="0", returncode=0):
+        outputs = {
+            _WIN_DRV_QUERY: CommandResult(returncode, drv_stdout, ""),
+            _WIN_DRV_COUNT_CMD: CommandResult(returncode, count_stdout, ""),
+        }
+        return FakeRunner(outputs=outputs)
+
+    def test_all_microsoft_signed_is_pass(self):
+        payload = '[{"DeviceName":"NIC","DriverProviderName":"Microsoft","IsSigned":true,"Signer":"Microsoft Windows","InfName":"nic.inf"}]'
+        result = _windows_driver_check(self._runner(drv_stdout=payload, count_stdout="1"))
+        self.assertEqual(result.status, "pass")
+
+    def test_unsigned_driver_is_fail(self):
+        payload = '[{"DeviceName":"BadDrv","DriverProviderName":"Unknown","IsSigned":false,"Signer":null,"InfName":"bad.inf"}]'
+        result = _windows_driver_check(self._runner(drv_stdout=payload, count_stdout="1"))
+        self.assertEqual(result.status, "fail")
+        self.assertIn("DANGEROUS", result.details)
+
+    def test_custom_signed_is_warn(self):
+        payload = '[{"DeviceName":"GPU","DriverProviderName":"Nvidia","IsSigned":true,"Signer":"Nvidia Corp","InfName":"nv.inf"}]'
+        result = _windows_driver_check(self._runner(drv_stdout=payload, count_stdout="1"))
+        self.assertEqual(result.status, "warn")
+
+    def test_powershell_unavailable_is_skip(self):
+        runner = FakeRunner(outputs={
+            _WIN_DRV_COUNT_CMD: CommandResult(127, "", ""),
+            _WIN_DRV_QUERY: CommandResult(127, "", ""),
+        })
+        result = _windows_driver_check(runner)
+        self.assertEqual(result.status, "skip")
+
+    def test_empty_driver_list_is_skip(self):
+        result = _windows_driver_check(self._runner(drv_stdout="", count_stdout="0"))
+        self.assertEqual(result.status, "skip")
+
+
+# ---------------------------------------------------------------------------
+# system_checks – detect_os_info
+# ---------------------------------------------------------------------------
+
+class TestDetectOsInfo(unittest.TestCase):
+    def test_linux_reads_os_release(self):
+        fake_content = 'NAME="Ubuntu"\nVERSION="22.04.3 LTS (Jammy Jellyfish)"\nVERSION_ID="22.04"\n'
+        with patch("platform.system", return_value="Linux"), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=fake_content)), \
+             patch("platform.release", return_value="5.15.0"):
+            info = detect_os_info()
+        self.assertEqual(info.name, "Ubuntu")
+        self.assertIn("22.04", info.version)
+
+    def test_linux_fallback_on_oserror(self):
+        with patch("platform.system", return_value="Linux"), \
+             patch("builtins.open", side_effect=OSError), \
+             patch("platform.release", return_value="5.15.0"):
+            info = detect_os_info()
+        self.assertEqual(info.name, "Linux")
+        self.assertEqual(info.version, "5.15.0")
+
+    def test_macos(self):
+        with patch("platform.system", return_value="Darwin"), \
+             patch("platform.mac_ver", return_value=("14.1.0", ("", "", ""), "")):
+            info = detect_os_info()
+        self.assertEqual(info.name, "macOS")
+        self.assertEqual(info.version, "14.1.0")
+
+    def test_windows_without_patches(self):
+        with patch("platform.system", return_value="Windows"), \
+             patch("platform.win32_ver", return_value=("10", "10.0.19041", "SP0", "")), \
+             patch("platform.version", return_value="10.0.19041"):
+            runner = FakeRunner(outputs={
+                _PS_FLAGS + ("Get-HotFix | Select-Object -ExpandProperty HotFixID | Sort-Object",):
+                    CommandResult(1, "", "error")
+            })
+            info = detect_os_info(runner)
+        self.assertIn("Windows", info.name)
+        self.assertEqual(info.security_patches, [])
+
+    def test_windows_with_patches(self):
+        with patch("platform.system", return_value="Windows"), \
+             patch("platform.win32_ver", return_value=("10", "10.0.19041", "SP0", "")), \
+             patch("platform.version", return_value="10.0.19041"):
+            runner = FakeRunner(outputs={
+                _PS_FLAGS + ("Get-HotFix | Select-Object -ExpandProperty HotFixID | Sort-Object",):
+                    CommandResult(0, "KB5001234\nKB5005678\n", "")
+            })
+            info = detect_os_info(runner)
+        self.assertEqual(info.security_patches, ["KB5001234", "KB5005678"])
+
+
+# ---------------------------------------------------------------------------
+# reporting – render_text_report with new optional params
+# ---------------------------------------------------------------------------
+
+class TestRenderTextReportExtended(unittest.TestCase):
+    def _make_results(self):
+        rule = _make_rule()
+        return [(rule, CheckResult(rule_id="rule1", status="pass", details="ok"))]
+
+    def test_with_scanned_applications(self):
+        apps = [InstalledApplication(name="curl", version="7.85.0", source="dpkg")]
+        text = render_text_report("linux", self._make_results(), None, scanned_applications=apps)
+        self.assertIn("Installed Applications Scanned", text)
+        self.assertIn("curl", text)
+
+    def test_no_scanned_applications_section_absent(self):
+        text = render_text_report("linux", self._make_results(), None)
+        self.assertNotIn("Installed Applications Scanned", text)
+
+    def test_with_os_info(self):
+        from security_audit_tool.models import OsInfo
+        info = OsInfo(name="Ubuntu", version="22.04", kernel="5.15.0", security_patches=["KB001"])
+        text = render_text_report("linux", self._make_results(), None, os_info=info)
+        self.assertIn("Ubuntu", text)
+        self.assertIn("22.04", text)
+        self.assertIn("KB001", text)

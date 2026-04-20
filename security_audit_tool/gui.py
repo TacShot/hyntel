@@ -8,10 +8,10 @@ from tkinter import messagebox, scrolledtext, ttk
 
 from .cli import _attach_cves
 from .inventory import inventory_applications, map_applications_to_cves
-from .models import CheckResult
+from .models import CheckResult, DriverInfo
 from .reporting import export_report_bundle, render_text_report
 from .remediation import write_remediation_script
-from .system_checks import detect_platform, run_audit
+from .system_checks import detect_os_info, detect_platform, get_windows_drivers, run_audit
 
 
 RETRO_BG = "#0b120d"
@@ -35,6 +35,9 @@ class SecurityAuditGUI:
         self.current_target_os: str | None = None
         self.current_remediation_path: Path | None = None
         self.current_application_findings = None
+        self.current_applications: list = []
+        self.current_drivers: list[DriverInfo] = []
+        self.current_os_info = None
         self.current_export_paths: dict[str, Path] = {}
 
         self.target_os_var = tk.StringVar(value="auto")
@@ -155,10 +158,23 @@ class SecurityAuditGUI:
             pady=12,
         )
         self.output.pack(fill="both", expand=True)
+
+        # Configure colour tags for the text widget
+        self.output.tag_configure("pass", foreground="#8cff72")
+        self.output.tag_configure("fail", foreground="#ff6b6b")
+        self.output.tag_configure("warn", foreground="#ffd166")
+        self.output.tag_configure("skip", foreground="#4f7a52")
+        self.output.tag_configure("header", foreground="#8cff72", font=("Courier", 11, "bold"))
+        self.output.tag_configure("muted", foreground="#4f7a52")
+        self.output.tag_configure("danger", foreground="#ff6b6b", font=("Courier", 11, "bold"))
+
         self._append_output("BOOT> GUI initialized.\nBOOT> Press RUN AUDIT to start a scan.\n")
 
-    def _append_output(self, text: str) -> None:
-        self.output.insert(tk.END, text)
+    def _append_output(self, text: str, tag: str | None = None) -> None:
+        if tag:
+            self.output.insert(tk.END, text, tag)
+        else:
+            self.output.insert(tk.END, text)
         self.output.see(tk.END)
 
     def _start_audit(self) -> None:
@@ -168,7 +184,7 @@ class SecurityAuditGUI:
         self._append_output("BOOT> Starting security audit...\n")
         self._append_output(f"BOOT> Target OS mode: {self.target_os_var.get()}\n")
         self._append_output(f"BOOT> Include CVEs: {self.include_cves_var.get()}\n")
-        self._append_output(f"BOOT> Generate remediation: {self.generate_remediation_var.get()}\n\n")
+        self._append_output(f"BOOT> Generate remediation: {self.generate_remediation_var.get()}\n")
         self._append_output(f"BOOT> Scan installed apps: {self.scan_apps_var.get()}\n\n")
 
         worker = threading.Thread(target=self._run_audit_worker, daemon=True)
@@ -180,16 +196,36 @@ class SecurityAuditGUI:
             if target_os == "unknown":
                 raise RuntimeError("Could not detect a supported platform.")
 
+            # Detect OS info
+            try:
+                os_info = detect_os_info()
+                self.result_queue.put(("os_info", os_info))
+            except Exception:
+                os_info = None
+
             results = run_audit(target_os)
             if self.include_cves_var.get():
                 self.result_queue.put(("log", "NET> Querying related CVEs from NIST NVD where applicable...\n"))
                 _attach_cves(results, 3)
 
+            applications: list = []
             application_findings = None
             if self.scan_apps_var.get():
-                self.result_queue.put(("log", "INV> Inventorying installed applications and matching NVD CVEs...\n"))
+                self.result_queue.put(("log", "INV> Inventorying installed applications...\n"))
                 applications = inventory_applications(target_os, limit=25)
+                self.result_queue.put(("log", f"INV> Found {len(applications)} application(s). Matching against NVD CVEs...\n"))
                 application_findings = map_applications_to_cves(applications)
+
+            # Windows driver signing
+            drivers: list[DriverInfo] = []
+            if target_os == "windows":
+                self.result_queue.put(("log", "DRV> Querying Windows driver signing information...\n"))
+                from .system_checks import CommandRunner
+                try:
+                    drivers = get_windows_drivers(CommandRunner())
+                    self.result_queue.put(("log", f"DRV> Retrieved signing info for {len(drivers)} driver(s).\n"))
+                except Exception as exc:
+                    self.result_queue.put(("log", f"DRV> Driver query failed: {exc}\n"))
 
             failed_results: list[CheckResult] = [result for _, result in results if result.status == "fail"]
             remediation_path = None
@@ -197,8 +233,12 @@ class SecurityAuditGUI:
                 remediation_path = write_remediation_script(Path("artifacts"), target_os, failed_results)
                 self.result_queue.put(("log", f"FIX> Remediation script generated at {remediation_path}\n"))
 
-            exports = export_report_bundle(target_os, results, remediation_path, application_findings)
-            self.result_queue.put(("done", (target_os, results, remediation_path, application_findings, exports)))
+            exports = export_report_bundle(
+                target_os, results, remediation_path, application_findings,
+                scanned_applications=applications or None,
+                os_info=os_info,
+            )
+            self.result_queue.put(("done", (target_os, results, remediation_path, applications, application_findings, drivers, os_info, exports)))
         except Exception as exc:  # pragma: no cover - GUI fallback path
             self.result_queue.put(("error", str(exc)))
 
@@ -208,27 +248,120 @@ class SecurityAuditGUI:
                 kind, payload = self.result_queue.get_nowait()
                 if kind == "log":
                     self._append_output(str(payload))
+                elif kind == "os_info":
+                    info = payload
+                    self._append_output("\n── SYSTEM INFORMATION ──────────────────────────────\n", "header")
+                    self._append_output(f"  OS      : {info.name}\n")
+                    self._append_output(f"  Version : {info.version}\n")
+                    if info.build:
+                        self._append_output(f"  Build   : {info.build}\n")
+                    if info.kernel:
+                        self._append_output(f"  Kernel  : {info.kernel}\n")
+                    if info.security_patches:
+                        self._append_output(f"  Security patches ({len(info.security_patches)} installed):\n")
+                        for kb in info.security_patches[:10]:
+                            self._append_output(f"    {kb}\n", "muted")
+                        if len(info.security_patches) > 10:
+                            self._append_output(f"    ... and {len(info.security_patches) - 10} more\n", "muted")
+                    self._append_output("\n")
                 elif kind == "error":
                     self.status_var.set("ERROR")
-                    self._append_output(f"ERR> {payload}\n")
+                    self._append_output(f"ERR> {payload}\n", "fail")
                     messagebox.showerror("Security Audit Terminal", str(payload))
                 elif kind == "done":
-                    target_os, results, remediation_path, application_findings, exports = payload
+                    target_os, results, remediation_path, applications, application_findings, drivers, os_info, exports = payload
                     self.current_target_os = target_os
                     self.current_results = results
                     self.current_remediation_path = remediation_path
+                    self.current_applications = applications
                     self.current_application_findings = application_findings
+                    self.current_drivers = drivers
+                    self.current_os_info = os_info
                     self.current_export_paths = exports
                     self.status_var.set("COMPLETE")
                     self.export_var.set(f"Desktop export: {exports['text_report'].parent}")
-                    self._append_output("SYS> Audit complete.\n\n")
-                    self._append_output(render_text_report(target_os, results, remediation_path, application_findings))
+                    self._append_output("\nSYS> Audit complete.\n\n", "header")
+                    self._render_results(target_os, results, remediation_path, applications, application_findings, drivers)
                     self._append_output("\nEXPORT> Saved text report to Desktop.\n")
-                    self._append_output(f"EXPORT> {exports['text_report']}\n")
-                    self._append_output(f"EXPORT> {exports['json_report']}\n")
+                    self._append_output(f"EXPORT> {exports['text_report']}\n", "muted")
+                    self._append_output(f"EXPORT> {exports['json_report']}\n", "muted")
         except queue.Empty:
             pass
         self.root.after(150, self._poll_queue)
+
+    def _render_results(
+        self,
+        target_os: str,
+        results: list[tuple],
+        remediation_path: Path | None,
+        applications: list,
+        application_findings,
+        drivers: list[DriverInfo],
+    ) -> None:
+        self._append_output("── AUDIT RESULTS ───────────────────────────────────\n", "header")
+        for rule, result in results:
+            status = result.status.upper()
+            tag = {"PASS": "pass", "FAIL": "fail", "WARN": "warn", "SKIP": "skip"}.get(status, None)
+            icon = {"PASS": "✔", "FAIL": "✘", "WARN": "⚠", "SKIP": "–"}.get(status, "?")
+            self._append_output(f"  {icon} [{status}] {rule.title}  [{rule.severity.upper()}]\n", tag)
+            if result.details:
+                self._append_output(f"    ↳ {result.details}\n", "muted")
+            if result.observed_value:
+                self._append_output(f"    ↳ Observed: {result.observed_value}\n", "muted")
+            if result.related_cves:
+                for cve in result.related_cves[:3]:
+                    cve_id = cve.get("id") or "N/A"
+                    severity = cve.get("severity") or "?"
+                    score = cve.get("score")
+                    score_str = f", score {score}" if score is not None else ""
+                    self._append_output(f"      • {cve_id} ({severity}{score_str})\n", "warn")
+
+        passed = sum(1 for _, r in results if r.status == "pass")
+        failed = sum(1 for _, r in results if r.status == "fail")
+        skipped = sum(1 for _, r in results if r.status == "skip")
+        self._append_output(f"\n  Summary: {passed} passed | {failed} failed | {skipped} skipped\n")
+
+        # Application scan results
+        if applications:
+            self._append_output(f"\n── INSTALLED APPLICATIONS ({len(applications)} scanned) ─────────\n", "header")
+            for app in applications:
+                self._append_output(f"  {app.name:<35} {app.version:<20} ({app.source})\n", "muted")
+            if application_findings:
+                self._append_output(f"\n  ⚠ CVE matches found for {len(application_findings)} app(s):\n", "warn")
+                for finding in application_findings:
+                    app = finding.application
+                    self._append_output(f"  • {app.name} {app.version}\n", "fail")
+                    for cve in finding.cves[:3]:
+                        cve_id = cve.get("id") or "N/A"
+                        severity = cve.get("severity") or "?"
+                        score = cve.get("score")
+                        score_str = f", score {score}" if score is not None else ""
+                        self._append_output(f"      {cve_id} ({severity}{score_str})\n", "warn")
+            elif application_findings is not None:
+                self._append_output("  ✔ No CVE matches found for scanned applications.\n", "pass")
+
+        # Windows driver signing
+        if drivers:
+            dangerous = [d for d in drivers if d.is_dangerous]
+            suspicious = [d for d in drivers if d.is_suspicious and not d.is_dangerous]
+            self._append_output(f"\n── DRIVER SIGNATURES ({len(drivers)} drivers) ────────────────\n", "header")
+            microsoft_count = sum(1 for d in drivers if d.sign_type == "microsoft")
+            custom_count = sum(1 for d in drivers if d.sign_type == "custom")
+            self._append_output(f"  Microsoft-signed: {microsoft_count}  |  Custom-signed: {custom_count}  |  Unsigned: {len(dangerous)}\n")
+            if suspicious:
+                self._append_output(f"\n  ⚠ SUSPICIOUS (custom-signed) — {len(suspicious)} driver(s):\n", "warn")
+                for d in suspicious[:20]:
+                    self._append_output(f"    → {d.name}  (Signer: {d.signer or 'unknown'})\n", "warn")
+                if len(suspicious) > 20:
+                    self._append_output(f"    ... and {len(suspicious) - 20} more\n", "muted")
+            if dangerous:
+                self._append_output(f"\n  ⛔ DANGEROUS (unsigned) — {len(dangerous)} driver(s):\n", "danger")
+                for d in dangerous[:20]:
+                    self._append_output(f"    → {d.name}  Provider: {d.provider or 'N/A'}\n", "danger")
+                if len(dangerous) > 20:
+                    self._append_output(f"    ... and {len(dangerous) - 20} more\n", "muted")
+            if not suspicious and not dangerous:
+                self._append_output("  ✔ All drivers are Microsoft/WHQL-signed.\n", "pass")
 
     def _save_reports_again(self) -> None:
         if not self.current_results or not self.current_target_os:
@@ -239,12 +372,14 @@ class SecurityAuditGUI:
             self.current_results,
             self.current_remediation_path,
             self.current_application_findings,
+            scanned_applications=self.current_applications or None,
+            os_info=self.current_os_info,
         )
         self.current_export_paths = exports
         self.export_var.set(f"Desktop export: {exports['text_report'].parent}")
         self._append_output("\nEXPORT> Saved another report bundle to Desktop.\n")
-        self._append_output(f"EXPORT> {exports['text_report']}\n")
-        self._append_output(f"EXPORT> {exports['json_report']}\n")
+        self._append_output(f"EXPORT> {exports['text_report']}\n", "muted")
+        self._append_output(f"EXPORT> {exports['json_report']}\n", "muted")
 
     def run(self) -> None:
         self.root.mainloop()
