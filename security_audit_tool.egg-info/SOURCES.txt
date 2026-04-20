@@ -4,11 +4,14 @@ security_audit_tool/__init__.py
 security_audit_tool/__main__.py
 security_audit_tool/cli.py
 security_audit_tool/gui.py
+security_audit_tool/inventory.py
+security_audit_tool/launcher.py
 security_audit_tool/models.py
 security_audit_tool/nvd.py
 security_audit_tool/remediation.py
 security_audit_tool/reporting.py
 security_audit_tool/system_checks.py
+security_audit_tool/terminal_ui.py
 security_audit_tool.egg-info/PKG-INFO
 security_audit_tool.egg-info/SOURCES.txt
 security_audit_tool.egg-info/dependency_links.txt

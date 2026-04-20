@@ -142,6 +142,16 @@ chmod +x ./audit.sh
 ./audit.sh
 ```
 
+`audit.sh` opens an interactive step menu. Enter:
+
+- `1` to print the detected OS
+- `2` to run the configuration audit and create a report
+- `3` to run the configuration audit with CVE lookup
+- `4` to run the installed application CVE scan
+- `5` to launch the GUI
+- `full` to run the whole audit flow
+- `0` to exit
+
 Launch the GUI:
 
 ```bash
@@ -244,6 +254,14 @@ Recommended wrapper:
 ./audit.sh --include-cves
 ```
 
+### Scan Installed Applications for CVEs
+
+```bash
+./audit.sh --scan-apps
+```
+
+This inventories installed applications from the local package manager or operating-system registry, derives candidate CPE matches from NVD, and then queries CVEs tied to the matched product/version.
+
 ### Generate Remediation Script
 
 ```bash
@@ -253,7 +271,7 @@ Recommended wrapper:
 ### Full Example
 
 ```bash
-./audit.sh --include-cves --format json
+./audit.sh --include-cves --scan-apps --format json
 ```
 
 ### Launch the GUI Executable
@@ -263,6 +281,8 @@ Recommended wrapper:
 ```
 
 The GUI uses a retro terminal-style interface and automatically exports the final text and JSON reports to `Desktop/SecurityAuditReports/` after each completed scan.
+
+On systems where the native Tk GUI cannot start, the launcher falls back to a terminal-based retro interface instead of aborting.
 
 ### Explicit Target Ruleset
 
@@ -299,6 +319,7 @@ Important limitations:
 - CVE matching is heuristic and keyword-based
 - Returned CVEs are related security context, not definitive proof that the host is vulnerable
 - Network access is required when `--include-cves` is enabled
+- Installed application matching depends on package naming, CPE quality, and version normalization; some applications may not map cleanly
 
 ## Security and Operational Notes
 
