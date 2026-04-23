@@ -108,6 +108,8 @@ def _prompt_text(label: str, default: str) -> str:
     except (EOFError, KeyboardInterrupt):
         print()
         return default
+    if raw.lower() in {"y", "yes", "n", "no"}:
+        return default
     return raw or default
 
 
