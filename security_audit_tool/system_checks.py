@@ -327,8 +327,27 @@ def _windows_defender_realtime(runner: CommandRunner) -> CheckResult:
     return _fail_result("windows_defender_realtime_enabled", "Microsoft Defender real-time monitoring is disabled.", output or result.stderr)
 
 
-def _classify_driver(is_signed: bool, signer: str | None) -> tuple[str, bool, bool]:
+# Known Windows virtual/software drivers that have no WMI signer metadata
+# but are built-in and safe — whitelisted to avoid false positives.
+_KNOWN_SAFE_DRIVERS: set[str] = {
+    "bluetooth peripheral device",
+    "rfcomm com",
+    "btfastpair",
+    "btnotifyr",
+    "nearbysharing",
+    "watch",
+    "besota",
+    "sms/mms",
+    "jl_spp",
+    "oppointeraction",
+}
+
+
+def _classify_driver(is_signed: bool, signer: str | None, name: str = "") -> tuple[str, bool, bool]:
     """Return (sign_type, is_suspicious, is_dangerous) for a driver."""
+    # Whitelist known safe Windows virtual drivers with no WMI signer metadata
+    if name.lower() in _KNOWN_SAFE_DRIVERS:
+        return "microsoft", False, False
     if not is_signed or not signer:
         return "unsigned", True, True
     signer_lower = signer.lower()
@@ -362,7 +381,7 @@ def get_windows_drivers(runner: CommandRunner) -> list[DriverInfo]:
         is_signed = bool(item.get("IsSigned"))
         signer = str(item.get("Signer") or "").strip() or None
         inf_name = str(item.get("InfName") or "").strip() or None
-        sign_type, is_suspicious, is_dangerous = _classify_driver(is_signed, signer)
+        sign_type, is_suspicious, is_dangerous = _classify_driver(is_signed, signer, name)
         drivers.append(
             DriverInfo(
                 name=name,
