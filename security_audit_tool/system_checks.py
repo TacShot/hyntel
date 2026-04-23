@@ -276,7 +276,13 @@ def _windows_firewall(runner: CommandRunner) -> CheckResult:
     output = result.stdout.strip()
     if result.returncode == 127:
         return _skip_result("windows_firewall_enabled", "powershell.exe is not available.")
-    enabled_count = output.lower().count('"enabled":true')
+    try:
+        profiles = json.loads(output)
+        if isinstance(profiles, dict):
+            profiles = [profiles]
+        enabled_count = sum(1 for p in profiles if p.get("Enabled") in (True, 1))
+    except (json.JSONDecodeError, AttributeError):
+        enabled_count = 0
     if enabled_count >= 3:
         return _pass_result("windows_firewall_enabled", "All Windows Firewall profiles are enabled.", output)
     return _fail_result("windows_firewall_enabled", "One or more Windows Firewall profiles are disabled.", output or result.stderr)
@@ -384,8 +390,8 @@ def _windows_driver_check(runner: CommandRunner) -> CheckResult:
     if not drivers:
         return _skip_result("windows_driver_signing", "No driver signing data could be retrieved.")
 
-    dangerous = [d for d in drivers if d.is_dangerous]
-    suspicious = [d for d in drivers if d.is_suspicious and not d.is_dangerous]
+    dangerous = [d for d in drivers if d.is_dangerous and d.inf_name]
+    suspicious = [d for d in drivers if d.is_suspicious and not d.is_dangerous and d.inf_name]
     total = len(drivers)
 
     parts: list[str] = [f"Total drivers: {total}."]
