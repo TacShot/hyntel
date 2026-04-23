@@ -26,7 +26,12 @@ CYAN = "\033[96m" if _SUPPORTS_COLOUR else ""
 BOLD = "\033[1m" if _SUPPORTS_COLOUR else ""
 DIM = "\033[2m" if _SUPPORTS_COLOUR else ""
 RESET = "\033[0m" if _SUPPORTS_COLOUR else ""
-
+def _safe_print(text: str) -> None:
+    try:
+        print(text)
+    except (UnicodeEncodeError, UnicodeDecodeError, OSError):
+        ascii_text = text.encode("ascii", errors="replace").decode("ascii")
+        print(ascii_text)
 
 # ---------------------------------------------------------------------------
 # Box-drawing helpers
@@ -136,7 +141,7 @@ def _print_header() -> None:
         "SECURITY AUDIT TERMINAL",
         "Cross-platform Security Configuration Scanner",
     ]
-    print(_double_box("", lines, width=w))
+    _safe_print(_double_box("", lines, width=w))
     print()
 
 
@@ -158,7 +163,7 @@ def _print_os_info(info: OsInfo) -> None:
             lines.append(f"  {kb}")
         if len(info.security_patches) > 10:
             lines.append(f"  ... and {len(info.security_patches) - 10} more")
-    print(_single_box("SYSTEM INFORMATION", lines, width=w))
+    _safe_print(_single_box("SYSTEM INFORMATION", lines, width=w))
     print()
 
 
@@ -203,7 +208,7 @@ def _print_audit_results(results: list[tuple]) -> None:
         f"{DIM}{skipped} skipped{RESET}"
     )
     lines.append(f"Summary: {summary}")
-    print(_single_box("AUDIT RESULTS", lines, width=w))
+    _safe_print(_single_box("AUDIT RESULTS", lines, width=w))
     print()
 
 
@@ -216,7 +221,7 @@ def _print_applications(
 
     if not applications:
         lines.append("No applications found.")
-        print(_single_box(f"INSTALLED APPLICATIONS (0 scanned)", lines, width=w))
+        _safe_print(_single_box(f"INSTALLED APPLICATIONS (0 scanned)", lines, width=w))
         print()
         return
 
@@ -243,7 +248,7 @@ def _print_applications(
         lines.append("")
         lines.append(f"{GREEN}✔ No CVE matches found for scanned applications.{RESET}")
 
-    print(_single_box(f"INSTALLED APPLICATIONS ({len(applications)} scanned)", lines, width=w))
+    _safe_print(_single_box(f"INSTALLED APPLICATIONS ({len(applications)} scanned)", lines, width=w))
     print()
 
 
@@ -265,7 +270,7 @@ def _print_process_findings(processes: list[RunningProcess], findings: list[Proc
             lines.append("")
     else:
         lines.append(f"{GREEN}✔ No obviously suspicious running processes were detected.{RESET}")
-    print(_single_box("RUNNING PROCESS REVIEW", lines, width=w))
+    _safe_print(_single_box("RUNNING PROCESS REVIEW", lines, width=w))
     print()
 
 
@@ -309,7 +314,7 @@ def _print_driver_info(drivers: list[DriverInfo]) -> None:
     if not suspicious and not dangerous:
         lines.append(f"{GREEN}✔ All drivers are Microsoft/WHQL-signed.{RESET}")
 
-    print(_single_box("WINDOWS DRIVER SIGNATURES", lines, width=w))
+    _safe_print(_single_box("WINDOWS DRIVER SIGNATURES", lines, width=w))
     print()
 
 
@@ -320,7 +325,7 @@ def _print_driver_info(drivers: list[DriverInfo]) -> None:
 def main() -> int:
     try:
         _print_header()
-    except UnicodeEncodeError:
+    except (UnicodeEncodeError, UnicodeDecodeError, OSError):
         # Fallback for terminals that can't render box-drawing chars
         print("=== SECURITY AUDIT TERMINAL ===\n")
 
@@ -437,7 +442,7 @@ def main() -> int:
         ]
         if remediation_path:
             lines.append(f"Remediation : {remediation_path}")
-        print(_single_box("EXPORTED REPORTS", lines, width=w))
+        _safe_print(_single_box("EXPORTED REPORTS", lines, width=w))
     except Exception as exc:
         print(f"{AMBER}Warning: report export failed: {exc}{RESET}")
 
