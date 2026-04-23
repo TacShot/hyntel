@@ -4,7 +4,13 @@ import json
 import platform
 import re
 
-from .models import ApplicationFinding, CommandResult, InstalledApplication
+from .models import (
+    ApplicationFinding,
+    CommandResult,
+    InstalledApplication,
+    ProcessFinding,
+    RunningProcess,
+)
 from .nvd import fetch_cves_by_cpe, search_cpes
 from .system_checks import CommandRunner
 
@@ -174,4 +180,129 @@ def map_applications_to_cves(
         cves = fetch_cves_by_cpe(selected_cpe, limit=cve_limit)
         if cves:
             findings.append(ApplicationFinding(application=app, cpe_name=selected_cpe, cves=cves))
+    return findings
+
+
+def _inventory_unix_processes(runner: CommandRunner, limit: int) -> list[RunningProcess]:
+    result = runner.run(["ps", "-axo", "pid=,comm=,args="])
+    if result.returncode != 0:
+        return []
+
+    processes: list[RunningProcess] = []
+    for line in result.stdout.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        parts = raw.split(None, 2)
+        if len(parts) < 2:
+            continue
+        pid_text, name = parts[0], parts[1]
+        command_line = parts[2] if len(parts) > 2 else name
+        if not pid_text.isdigit():
+            continue
+        processes.append(
+            RunningProcess(
+                pid=int(pid_text),
+                name=name.strip(),
+                executable=name.strip(),
+                command_line=command_line.strip(),
+                source="ps",
+            )
+        )
+        if len(processes) >= limit:
+            break
+    return processes
+
+
+def _inventory_windows_processes(runner: CommandRunner, limit: int) -> list[RunningProcess]:
+    script = (
+        "Get-CimInstance Win32_Process | "
+        f"Select-Object -First {limit} ProcessId, Name, ExecutablePath, CommandLine | "
+        "ConvertTo-Json -Compress"
+    )
+    result = runner.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ]
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, dict):
+        payload = [payload]
+
+    processes: list[RunningProcess] = []
+    for item in payload:
+        pid = int(item.get("ProcessId") or 0)
+        name = str(item.get("Name") or "").strip()
+        if not pid or not name:
+            continue
+        processes.append(
+            RunningProcess(
+                pid=pid,
+                name=name,
+                executable=str(item.get("ExecutablePath") or "").strip() or None,
+                command_line=str(item.get("CommandLine") or "").strip() or None,
+                source="win32_process",
+            )
+        )
+    return processes
+
+
+def inventory_running_processes(
+    target_os: str,
+    runner: CommandRunner | None = None,
+    limit: int = 100,
+) -> list[RunningProcess]:
+    active_runner = runner or CommandRunner()
+    capped_limit = max(1, limit)
+    if target_os in {"linux", "macos"}:
+        return _inventory_unix_processes(active_runner, capped_limit)
+    if target_os == "windows":
+        return _inventory_windows_processes(active_runner, capped_limit)
+    return []
+
+
+def assess_processes(processes: list[RunningProcess]) -> list[ProcessFinding]:
+    findings: list[ProcessFinding] = []
+    temp_markers = (
+        "/tmp/",
+        "/private/var/",
+        "/var/tmp/",
+        "\\temp\\",
+        "\\appdata\\local\\temp\\",
+    )
+    risky_names = {"powershell", "powershell.exe", "cmd.exe", "wscript.exe", "cscript.exe", "mshta.exe", "rundll32.exe"}
+    for process in processes:
+        reasons: list[str] = []
+        command = (process.command_line or "").lower()
+        executable = (process.executable or "").lower()
+        name = process.name.lower()
+
+        if any(marker in executable for marker in temp_markers) or any(marker in command for marker in temp_markers):
+            reasons.append("process is executing from a temporary or user-writable path")
+        if name in risky_names and ("-enc " in command or " encodedcommand " in command or "frombase64string" in command):
+            reasons.append("process command line looks encoded or obfuscated")
+        if re.fullmatch(r"[a-f0-9]{8,}\.?(exe)?", name):
+            reasons.append("process name looks randomly generated")
+
+        if reasons:
+            action = "Review the process path and parent application, then terminate or quarantine it if untrusted."
+            findings.append(
+                ProcessFinding(
+                    process=process,
+                    severity="high" if any("encoded" in reason for reason in reasons) else "medium",
+                    reasons=reasons,
+                    recommended_action=action,
+                )
+            )
     return findings

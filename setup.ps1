@@ -43,15 +43,15 @@ function Install-Python {
 }
 
 function Test-Python3 {
-    if (Test-Command "python") {
-        & python -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
+    if (Test-Command "py") {
+        & py -3 -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
         if ($LASTEXITCODE -eq 0) {
             return $true
         }
     }
 
-    if (Test-Command "py") {
-        & py -3 -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
+    if (Test-Command "python") {
+        & python -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
         if ($LASTEXITCODE -eq 0) {
             return $true
         }
@@ -61,16 +61,17 @@ function Test-Python3 {
 }
 
 function Resolve-Python {
-    if (Test-Command "python") {
-        & python -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            return "python"
-        }
-    }
     if (Test-Command "py") {
         & py -3 -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
         if ($LASTEXITCODE -eq 0) {
             return "py -3"
+        }
+    }
+
+    if (Test-Command "python") {
+        & python -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return "python"
         }
     }
     throw "Python 3 was not found after installation."

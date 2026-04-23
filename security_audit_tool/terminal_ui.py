@@ -6,9 +6,9 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 
 from .cli import _attach_cves
-from .inventory import inventory_applications, map_applications_to_cves
-from .models import CheckResult, DriverInfo, OsInfo
-from .reporting import export_report_bundle, render_text_report
+from .inventory import assess_processes, inventory_applications, inventory_running_processes, map_applications_to_cves
+from .models import CheckResult, DriverInfo, OsInfo, ProcessFinding, RunningProcess
+from .reporting import export_report_bundle
 from .remediation import write_remediation_script
 from .system_checks import detect_os_info, detect_platform, get_windows_drivers, run_audit
 
@@ -97,6 +97,15 @@ def _prompt_bool(label: str, default: bool) -> bool:
     return raw in {"y", "yes", "1", "true"}
 
 
+def _prompt_text(label: str, default: str) -> str:
+    try:
+        raw = input(f"  {label} [{default}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default
+    return raw or default
+
+
 # ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
@@ -137,6 +146,8 @@ def _print_os_info(info: OsInfo) -> None:
         f"OS        : {info.name}",
         f"Version   : {info.version}",
     ]
+    if info.architecture:
+        lines.append(f"Arch      : {info.architecture}")
     if info.build:
         lines.append(f"Build     : {info.build}")
     if info.kernel:
@@ -161,10 +172,16 @@ def _print_audit_results(results: list[tuple]) -> None:
         line = f"{icon} [{status_label}] {rule.title}"
         sev_str = f"[{sev_col}{rule.severity.upper()}{RESET}]"
         lines.append(f"{line}  {sev_str}")
+        lines.append(f"    ↳ What we checked: {DIM}{rule.description}{RESET}")
+        lines.append(f"    ↳ Why it matters : {DIM}{rule.rationale}{RESET}")
         if result.details:
             lines.append(f"    ↳ {DIM}{result.details}{RESET}")
         if result.observed_value:
             lines.append(f"    ↳ Observed: {DIM}{result.observed_value}{RESET}")
+        if result.remediation:
+            lines.append("    ↳ Recommended action:")
+            for action in result.remediation[:3]:
+                lines.append(f"      • {action}")
         if result.related_cves:
             lines.append(f"    ↳ Related CVEs:")
             for cve in result.related_cves[:3]:
@@ -227,6 +244,28 @@ def _print_applications(
         lines.append(f"{GREEN}✔ No CVE matches found for scanned applications.{RESET}")
 
     print(_single_box(f"INSTALLED APPLICATIONS ({len(applications)} scanned)", lines, width=w))
+    print()
+
+
+def _print_process_findings(processes: list[RunningProcess], findings: list[ProcessFinding]) -> None:
+    w = _term_width()
+    lines: list[str] = [f"Running processes reviewed: {len(processes)}", ""]
+    if findings:
+        for finding in findings[:15]:
+            process = finding.process
+            lines.append(f"[{finding.severity.upper()}] PID {process.pid} {process.name}")
+            for reason in finding.reasons:
+                lines.append(f"  Why flagged : {reason}")
+            if process.executable:
+                lines.append(f"  Executable  : {process.executable}")
+            if process.command_line and process.command_line != process.executable:
+                lines.append(f"  Command     : {process.command_line}")
+            if finding.recommended_action:
+                lines.append(f"  Action      : {finding.recommended_action}")
+            lines.append("")
+    else:
+        lines.append(f"{GREEN}✔ No obviously suspicious running processes were detected.{RESET}")
+    print(_single_box("RUNNING PROCESS REVIEW", lines, width=w))
     print()
 
 
@@ -299,12 +338,25 @@ def main() -> int:
 
     w = _term_width()
 
-    # Configuration prompts in a styled block
-    print(_single_box("SCAN CONFIGURATION", ["Configure scan options below (press Enter to accept defaults):"], width=w))
+    default_report_dir = str(Path.home() / "Desktop" / "SecurityAuditReports")
+    print(
+        _single_box(
+            "SCAN CONFIGURATION",
+            [
+                "Choose the scan scope and report location below.",
+                "Press Enter to accept the default shown in brackets.",
+                "",
+                "If application inventory is enabled, the audit also reviews running processes",
+                "and exports a CSV with scanned apps, concerning apps, safe apps, and process findings.",
+            ],
+            width=w,
+        )
+    )
     print()
-    include_cves = _prompt_bool("Include NVD CVE lookup          ", False)
-    generate_remediation = _prompt_bool("Generate remediation script      ", True)
-    scan_apps = _prompt_bool("Scan installed applications      ", False)
+    include_cves = _prompt_bool("Include NVD CVE lookup", False)
+    generate_remediation = _prompt_bool("Generate remediation script", True)
+    scan_apps = _prompt_bool("Scan installed applications and running processes", True)
+    report_dir = Path(_prompt_text("Save reports to", default_report_dir)).expanduser()
     print()
 
     # Running audit
@@ -320,6 +372,8 @@ def main() -> int:
     # Application scan
     applications: list = []
     application_findings: list | None = None
+    processes: list[RunningProcess] = []
+    process_findings: list[ProcessFinding] = []
     if scan_apps:
         print(f"{DIM}  Inventorying installed applications...{RESET}")
         try:
@@ -327,6 +381,9 @@ def main() -> int:
             application_findings = map_applications_to_cves(applications)
         except (HTTPError, URLError, TimeoutError, OSError):
             application_findings = []
+        print(f"{DIM}  Reviewing running processes for suspicious indicators...{RESET}")
+        processes = inventory_running_processes(target_os, limit=100)
+        process_findings = assess_processes(processes)
         print()
 
     # Windows driver scan
@@ -355,16 +412,28 @@ def main() -> int:
 
     if scan_apps:
         _print_applications(applications, application_findings)
+        _print_process_findings(processes, process_findings)
 
     if drivers:
         _print_driver_info(drivers)
 
     # Export reports
     try:
-        exported = export_report_bundle(target_os, results, remediation_path, application_findings)
+        exported = export_report_bundle(
+            target_os,
+            results,
+            remediation_path,
+            application_findings,
+            desktop_base=report_dir,
+            scanned_applications=applications or None,
+            os_info=os_info,
+            scanned_processes=processes or None,
+            process_findings=process_findings,
+        )
         lines = [
             f"Text report : {exported['text_report']}",
             f"JSON report : {exported['json_report']}",
+            f"CSV report  : {exported['csv_report']}",
         ]
         if remediation_path:
             lines.append(f"Remediation : {remediation_path}")

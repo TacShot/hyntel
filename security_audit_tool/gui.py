@@ -7,9 +7,9 @@ from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 
 from .cli import _attach_cves
-from .inventory import inventory_applications, map_applications_to_cves
-from .models import CheckResult, DriverInfo
-from .reporting import export_report_bundle, render_text_report
+from .inventory import assess_processes, inventory_applications, inventory_running_processes, map_applications_to_cves
+from .models import CheckResult, DriverInfo, ProcessFinding, RunningProcess
+from .reporting import export_report_bundle
 from .remediation import write_remediation_script
 from .system_checks import detect_os_info, detect_platform, get_windows_drivers, run_audit
 
@@ -37,6 +37,8 @@ class SecurityAuditGUI:
         self.current_application_findings = None
         self.current_applications: list = []
         self.current_drivers: list[DriverInfo] = []
+        self.current_processes: list[RunningProcess] = []
+        self.current_process_findings: list[ProcessFinding] = []
         self.current_os_info = None
         self.current_export_paths: dict[str, Path] = {}
 
@@ -210,11 +212,16 @@ class SecurityAuditGUI:
 
             applications: list = []
             application_findings = None
+            processes: list[RunningProcess] = []
+            process_findings: list[ProcessFinding] = []
             if self.scan_apps_var.get():
                 self.result_queue.put(("log", "INV> Inventorying installed applications...\n"))
                 applications = inventory_applications(target_os, limit=25)
                 self.result_queue.put(("log", f"INV> Found {len(applications)} application(s). Matching against NVD CVEs...\n"))
                 application_findings = map_applications_to_cves(applications)
+                self.result_queue.put(("log", "PROC> Reviewing running processes for suspicious indicators...\n"))
+                processes = inventory_running_processes(target_os, limit=100)
+                process_findings = assess_processes(processes)
 
             # Windows driver signing
             drivers: list[DriverInfo] = []
@@ -237,8 +244,10 @@ class SecurityAuditGUI:
                 target_os, results, remediation_path, application_findings,
                 scanned_applications=applications or None,
                 os_info=os_info,
+                scanned_processes=processes or None,
+                process_findings=process_findings,
             )
-            self.result_queue.put(("done", (target_os, results, remediation_path, applications, application_findings, drivers, os_info, exports)))
+            self.result_queue.put(("done", (target_os, results, remediation_path, applications, application_findings, processes, process_findings, drivers, os_info, exports)))
         except Exception as exc:  # pragma: no cover - GUI fallback path
             self.result_queue.put(("error", str(exc)))
 
@@ -253,6 +262,8 @@ class SecurityAuditGUI:
                     self._append_output("\n── SYSTEM INFORMATION ──────────────────────────────\n", "header")
                     self._append_output(f"  OS      : {info.name}\n")
                     self._append_output(f"  Version : {info.version}\n")
+                    if info.architecture:
+                        self._append_output(f"  Arch    : {info.architecture}\n")
                     if info.build:
                         self._append_output(f"  Build   : {info.build}\n")
                     if info.kernel:
@@ -269,22 +280,25 @@ class SecurityAuditGUI:
                     self._append_output(f"ERR> {payload}\n", "fail")
                     messagebox.showerror("Security Audit Terminal", str(payload))
                 elif kind == "done":
-                    target_os, results, remediation_path, applications, application_findings, drivers, os_info, exports = payload
+                    target_os, results, remediation_path, applications, application_findings, processes, process_findings, drivers, os_info, exports = payload
                     self.current_target_os = target_os
                     self.current_results = results
                     self.current_remediation_path = remediation_path
                     self.current_applications = applications
                     self.current_application_findings = application_findings
+                    self.current_processes = processes
+                    self.current_process_findings = process_findings
                     self.current_drivers = drivers
                     self.current_os_info = os_info
                     self.current_export_paths = exports
                     self.status_var.set("COMPLETE")
                     self.export_var.set(f"Desktop export: {exports['text_report'].parent}")
                     self._append_output("\nSYS> Audit complete.\n\n", "header")
-                    self._render_results(target_os, results, remediation_path, applications, application_findings, drivers)
+                    self._render_results(target_os, results, remediation_path, applications, application_findings, processes, process_findings, drivers)
                     self._append_output("\nEXPORT> Saved text report to Desktop.\n")
                     self._append_output(f"EXPORT> {exports['text_report']}\n", "muted")
                     self._append_output(f"EXPORT> {exports['json_report']}\n", "muted")
+                    self._append_output(f"EXPORT> {exports['csv_report']}\n", "muted")
         except queue.Empty:
             pass
         self.root.after(150, self._poll_queue)
@@ -296,6 +310,8 @@ class SecurityAuditGUI:
         remediation_path: Path | None,
         applications: list,
         application_findings,
+        processes: list[RunningProcess],
+        process_findings: list[ProcessFinding],
         drivers: list[DriverInfo],
     ) -> None:
         self._append_output("── AUDIT RESULTS ───────────────────────────────────\n", "header")
@@ -304,10 +320,16 @@ class SecurityAuditGUI:
             tag = {"PASS": "pass", "FAIL": "fail", "WARN": "warn", "SKIP": "skip"}.get(status, None)
             icon = {"PASS": "✔", "FAIL": "✘", "WARN": "⚠", "SKIP": "–"}.get(status, "?")
             self._append_output(f"  {icon} [{status}] {rule.title}  [{rule.severity.upper()}]\n", tag)
+            self._append_output(f"    What we checked: {rule.description}\n", "muted")
+            self._append_output(f"    Why it matters : {rule.rationale}\n", "muted")
             if result.details:
                 self._append_output(f"    ↳ {result.details}\n", "muted")
             if result.observed_value:
                 self._append_output(f"    ↳ Observed: {result.observed_value}\n", "muted")
+            if result.remediation:
+                self._append_output("    Recommended action:\n", "muted")
+                for action in result.remediation[:3]:
+                    self._append_output(f"      • {action}\n", "muted")
             if result.related_cves:
                 for cve in result.related_cves[:3]:
                     cve_id = cve.get("id") or "N/A"
@@ -339,6 +361,18 @@ class SecurityAuditGUI:
                         self._append_output(f"      {cve_id} ({severity}{score_str})\n", "warn")
             elif application_findings is not None:
                 self._append_output("  ✔ No CVE matches found for scanned applications.\n", "pass")
+            self._append_output(f"\n── RUNNING PROCESSES ({len(processes)} reviewed) ───────────────\n", "header")
+            if process_findings:
+                for finding in process_findings[:15]:
+                    self._append_output(f"  [{finding.severity.upper()}] PID {finding.process.pid} {finding.process.name}\n", "warn")
+                    for reason in finding.reasons:
+                        self._append_output(f"    Why flagged: {reason}\n", "muted")
+                    if finding.process.executable:
+                        self._append_output(f"    Executable : {finding.process.executable}\n", "muted")
+                    if finding.recommended_action:
+                        self._append_output(f"    Action     : {finding.recommended_action}\n", "muted")
+            else:
+                self._append_output("  ✔ No obviously suspicious running processes were detected.\n", "pass")
 
         # Windows driver signing
         if drivers:
@@ -374,12 +408,15 @@ class SecurityAuditGUI:
             self.current_application_findings,
             scanned_applications=self.current_applications or None,
             os_info=self.current_os_info,
+            scanned_processes=self.current_processes or None,
+            process_findings=self.current_process_findings,
         )
         self.current_export_paths = exports
         self.export_var.set(f"Desktop export: {exports['text_report'].parent}")
         self._append_output("\nEXPORT> Saved another report bundle to Desktop.\n")
         self._append_output(f"EXPORT> {exports['text_report']}\n", "muted")
         self._append_output(f"EXPORT> {exports['json_report']}\n", "muted")
+        self._append_output(f"EXPORT> {exports['csv_report']}\n", "muted")
 
     def run(self) -> None:
         self.root.mainloop()

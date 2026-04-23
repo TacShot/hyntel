@@ -1,6 +1,6 @@
 # Security Audit Tool
 
-A cross-platform command-line tool for auditing baseline system security settings on Linux, macOS, and Windows. The project evaluates common hardening controls, optionally enriches failed findings with related CVEs from the NIST National Vulnerability Database (NVD), and can generate remediation scripts for operator review.
+A cross-platform command-line tool for auditing baseline system security settings on Linux, macOS, and Windows. The project evaluates common hardening controls, optionally enriches failed findings with related CVEs from the NIST National Vulnerability Database (NVD), inventories installed applications and running processes, and can generate remediation scripts for operator review.
 
 The project now includes a cross-platform GUI with a retro terminal-style interface. Every completed scan can automatically export the final report bundle to the current user's Desktop.
 
@@ -13,7 +13,7 @@ This project is designed to support security configuration reviews with a simple
 - Flag failed or skipped controls
 - Optionally query NIST NVD for related vulnerabilities
 - Generate a remediation script for failed findings
-- Save the final report bundle to Desktop
+- Save the final report bundle as text, JSON, and CSV output
 
 The tool is intended for security assessment and hardening support. It does not assume that a local misconfiguration directly maps to a specific CVE. CVE enrichment is best understood as related vulnerability context.
 
@@ -68,8 +68,8 @@ flowchart TD
 | --- | --- |
 | `setup.sh` | Bootstrap script for Linux and macOS |
 | `setup.ps1` | Bootstrap script for Windows |
-| `audit.sh` | Audit runner for Linux and macOS |
-| `audit.ps1` | Audit runner for Windows |
+| `audit.sh` | Linux and macOS launcher with `Terminal interface`, `Launch GUI`, and `Exit` |
+| `audit.ps1` | Windows launcher with `Terminal interface`, `Launch GUI`, and `Exit` |
 | `security_audit_tool/cli.py` | CLI entry point and report rendering |
 | `security_audit_tool/gui.py` | Retro terminal-style Tkinter GUI |
 | `security_audit_tool/reporting.py` | Shared report rendering and Desktop export |
@@ -133,15 +133,11 @@ chmod +x ./audit.sh
 ./audit.sh
 ```
 
-`audit.sh` opens an interactive step menu. Enter:
+`audit.sh` opens a simple launcher. Enter:
 
-- `1` to print the detected OS
-- `2` to run the configuration audit and create a report
-- `3` to run the configuration audit with CVE lookup
-- `4` to run the installed application CVE scan
-- `5` to launch the GUI
-- `full` to run the whole audit flow
-- `0` to exit
+- `1` to use the interactive terminal interface
+- `2` to launch the GUI
+- `3` to exit
 
 Launch the GUI:
 
@@ -169,10 +165,9 @@ Launch the GUI:
 
 The audit wrappers:
 
-- detect the operating system
+- launch either the interactive terminal flow or the GUI
 - run the installed Python audit program from `.venv`
-- generate remediation output
-- save the final report bundle
+- export the final report bundle
 
 ### Option 2: Manual Setup
 
@@ -227,10 +222,12 @@ Recommended wrapper:
 ./audit.sh
 ```
 
-### Save Reports to Desktop
+### Save Reports
 
-```bash
-./audit.sh
+The terminal interface prompts for the report location. The default path is:
+
+```text
+~/Desktop/SecurityAuditReports/
 ```
 
 ### JSON Output
@@ -248,10 +245,10 @@ Recommended wrapper:
 ### Scan Installed Applications for CVEs
 
 ```bash
-./audit.sh --scan-apps
+./.venv/bin/security-audit --scan-apps
 ```
 
-This inventories installed applications from the local package manager or operating-system registry, derives candidate CPE matches from NVD, and then queries CVEs tied to the matched product/version.
+This inventories installed applications from the local package manager or operating-system registry, derives candidate CPE matches from NVD, queries CVEs tied to the matched product/version, and reviews running processes for suspicious indicators.
 
 ### Generate Remediation Script
 
@@ -262,7 +259,7 @@ This inventories installed applications from the local package manager or operat
 ### Full Example
 
 ```bash
-./audit.sh --include-cves --scan-apps --format json
+./.venv/bin/security-audit --include-cves --scan-apps --format json
 ```
 
 ### Launch the GUI Executable
@@ -271,9 +268,9 @@ This inventories installed applications from the local package manager or operat
 ./audit.sh --gui
 ```
 
-The GUI uses a retro terminal-style interface and automatically exports the final text and JSON reports to `Desktop/SecurityAuditReports/` after each completed scan.
+The GUI uses a retro terminal-style interface and automatically exports text, JSON, and CSV reports to `Desktop/SecurityAuditReports/` after each completed scan.
 
-On systems where the native Tk GUI cannot start, the launcher falls back to a terminal-based retro interface instead of aborting.
+On systems where the native Tk GUI cannot start, the launcher prints the reason and falls back to the terminal interface instead of aborting.
 
 ### Explicit Target Ruleset
 
@@ -298,12 +295,36 @@ Report bundle export location:
 - macOS: `~/Desktop/SecurityAuditReports/`
 - Windows: `%USERPROFILE%\Desktop\SecurityAuditReports\`
 
+Report bundle contents:
+
+- `security_audit_<os>_<timestamp>.txt` for the detailed report
+- `security_audit_<os>_<timestamp>.json` for structured output
+- `security_audit_<os>_<timestamp>.csv` for scanned apps, concerning apps, safe apps, scanned processes, and concerning processes
+
+The `artifacts/` directory is still used for generated remediation scripts and as a fallback export location when the Desktop path cannot be created.
+
 ## CVE Enrichment
 
 The tool uses the official NIST NVD CVE API 2.0 to retrieve related vulnerability records for failed checks.
 
 - Source: [NVD Vulnerabilities API](https://nvd.nist.gov/developers/vulnerabilities)
 - Optional API key: set `NVD_API_KEY`
+
+Set the API key before running the audit if you want higher NVD request limits.
+
+Linux or macOS:
+
+```bash
+export NVD_API_KEY="your-api-key-here"
+./audit.sh
+```
+
+Windows PowerShell:
+
+```powershell
+$env:NVD_API_KEY = "your-api-key-here"
+.\audit.ps1
+```
 
 Important limitations:
 

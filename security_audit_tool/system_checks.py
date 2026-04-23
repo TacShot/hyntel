@@ -57,30 +57,76 @@ def _detect_linux_os_info() -> OsInfo:
     except OSError:
         version = platform.release()
     kernel = platform.release()
-    return OsInfo(name=name, version=version, kernel=kernel)
+    architecture = platform.machine() or None
+    return OsInfo(name=name, version=version, architecture=architecture, kernel=kernel)
 
 
 def _detect_macos_os_info() -> OsInfo:
-    ver_tuple = platform.mac_ver()
-    version = ver_tuple[0] or platform.release()
-    build = ver_tuple[1][0] if ver_tuple[1] and ver_tuple[1][0] else None
-    return OsInfo(name="macOS", version=version, build=build)
+    version = platform.mac_ver()[0] or platform.release()
+    build = None
+    product_name = "macOS"
+    try:
+        sw_product_name = subprocess.run(
+            ["sw_vers", "-productName"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if sw_product_name:
+            product_name = sw_product_name
+        build = subprocess.run(
+            ["sw_vers", "-buildVersion"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip() or None
+    except OSError:
+        product_name = "macOS"
+    return OsInfo(
+        name=product_name,
+        version=version,
+        architecture=platform.machine() or None,
+        build=build,
+        kernel=platform.release() or None,
+    )
 
 
 def _detect_windows_os_info(runner: "CommandRunner | None" = None) -> OsInfo:
-    win_ver = platform.win32_ver()
-    name = f"Windows {win_ver[0]}" if win_ver[0] else "Windows"
-    version = win_ver[1] or platform.version()
-    build = win_ver[1] or None
+    name = "Windows"
+    version = platform.version()
+    build = None
+    architecture = platform.machine() or None
     patches: list[str] = []
     active_runner = runner or CommandRunner()
+    os_result = _powershell(
+        active_runner,
+        "Get-CimInstance Win32_OperatingSystem | "
+        "Select-Object Caption, Version, BuildNumber, OSArchitecture | ConvertTo-Json -Compress",
+    )
+    if os_result.returncode == 0 and os_result.stdout.strip():
+        try:
+            payload = json.loads(os_result.stdout)
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict):
+            name = str(payload.get("Caption") or name).strip() or name
+            version = str(payload.get("Version") or version).strip() or version
+            build = str(payload.get("BuildNumber") or "").strip() or None
+            architecture = str(payload.get("OSArchitecture") or architecture or "").strip() or architecture
     patch_result = _powershell(
         active_runner,
         "Get-HotFix | Select-Object -ExpandProperty HotFixID | Sort-Object",
     )
     if patch_result.returncode == 0 and patch_result.stdout.strip():
         patches = [ln.strip() for ln in patch_result.stdout.splitlines() if ln.strip()]
-    return OsInfo(name=name, version=version, build=build, security_patches=patches)
+    return OsInfo(
+        name=name,
+        version=version,
+        architecture=architecture,
+        build=build,
+        kernel=platform.release() or None,
+        security_patches=patches,
+    )
 
 
 def detect_os_info(runner: "CommandRunner | None" = None) -> OsInfo:
@@ -92,7 +138,11 @@ def detect_os_info(runner: "CommandRunner | None" = None) -> OsInfo:
         return _detect_macos_os_info()
     if system == "windows":
         return _detect_windows_os_info(runner)
-    return OsInfo(name=platform.system() or "unknown", version=platform.version())
+    return OsInfo(
+        name=platform.system() or "unknown",
+        version=platform.version(),
+        architecture=platform.machine() or None,
+    )
 
 
 def _pass_result(rule_id: str, details: str, observed: str | None = None) -> CheckResult:

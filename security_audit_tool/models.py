@@ -60,6 +60,7 @@ class OsInfo:
 
     name: str
     version: str
+    architecture: str | None = None
     build: str | None = None
     kernel: str | None = None
     security_patches: list[str] = field(default_factory=list)
@@ -78,3 +79,20 @@ class DriverInfo:
     is_suspicious: bool
     is_dangerous: bool
     inf_name: str | None = None
+
+
+@dataclass(frozen=True)
+class RunningProcess:
+    pid: int
+    name: str
+    executable: str | None = None
+    command_line: str | None = None
+    source: str = "process-list"
+
+
+@dataclass
+class ProcessFinding:
+    process: RunningProcess
+    severity: str
+    reasons: list[str] = field(default_factory=list)
+    recommended_action: str | None = None

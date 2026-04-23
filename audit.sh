@@ -4,20 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_BIN_DIR="${ROOT_DIR}/.venv/bin"
 PYTHON_BIN="${VENV_BIN_DIR}/python"
-CLI_BIN="${VENV_BIN_DIR}/security-audit"
 
 log() {
   printf '[audit] %s\n' "$1"
-}
-
-detect_os() {
-  local uname_out
-  uname_out="$(uname -s)"
-  case "${uname_out}" in
-    Linux) echo "linux" ;;
-    Darwin) echo "macos" ;;
-    *) echo "unknown" ;;
-  esac
 }
 
 ensure_ready() {
@@ -28,127 +17,75 @@ ensure_ready() {
   fi
 }
 
-run_detect_os() {
-  local detected_os
-  detected_os="$(detect_os)"
-  if [[ "${detected_os}" == "unknown" ]]; then
-    echo "Unsupported operating system for audit.sh." >&2
-    exit 1
-  fi
-  printf '%s\n' "${detected_os}"
-}
-
-run_basic_audit() {
-  local detected_os="$1"
-  log "Running configuration audit"
-  "${CLI_BIN}" --target-os "${detected_os}" --generate-remediation --save-to-desktop
-}
-
-run_cve_audit() {
-  local detected_os="$1"
-  log "Running configuration audit with NVD CVE lookup"
-  "${CLI_BIN}" --target-os "${detected_os}" --generate-remediation --save-to-desktop --include-cves
-}
-
-run_application_scan() {
-  local detected_os="$1"
-  log "Running installed application CVE scan"
-  "${CLI_BIN}" --target-os "${detected_os}" --generate-remediation --save-to-desktop --scan-apps
+run_terminal_interface() {
+  log "Launching the terminal interface"
+  exec "${PYTHON_BIN}" -m security_audit_tool.terminal_ui
 }
 
 run_gui() {
-  log "Launching GUI"
+  log "Launching the GUI"
   exec "${PYTHON_BIN}" -m security_audit_tool.launcher
-}
-
-run_full() {
-  local detected_os="$1"
-  log "Running full audit flow"
-  "${CLI_BIN}" \
-    --target-os "${detected_os}" \
-    --generate-remediation \
-    --save-to-desktop \
-    --include-cves \
-    --scan-apps
 }
 
 print_menu() {
   cat <<'EOF'
 
-Choose a step to run:
-  1) Detect OS
-  2) Run configuration audit and create report
-  3) Run configuration audit with CVE lookup
-  4) Run installed application CVE scan
-  5) Launch GUI
-  full) Run the full audit flow
-  0) Exit
+Choose an option:
+  1) Use Terminal interface
+  2) Launch GUI
+  3) Exit
 
 EOF
 }
 
-run_step() {
-  local detected_os="$1"
-  local selection="$2"
-
-  case "${selection}" in
+run_selection() {
+  case "${1}" in
     1)
-      log "Detected OS: ${detected_os}"
+      run_terminal_interface
       ;;
     2)
-      run_basic_audit "${detected_os}"
-      ;;
-    3)
-      run_cve_audit "${detected_os}"
-      ;;
-    4)
-      run_application_scan "${detected_os}"
-      ;;
-    5)
       run_gui
       ;;
-    full)
-      run_full "${detected_os}"
-      ;;
-    0)
+    3|0|exit)
       log "Exiting"
       exit 0
       ;;
     *)
-      echo "Invalid selection: ${selection}" >&2
+      echo "Invalid selection: ${1}" >&2
       ;;
   esac
 }
 
 interactive_menu() {
-  local detected_os="$1"
   local selection
-
   while true; do
     print_menu
-    read -r -p "Enter step number (or full): " selection
-    run_step "${detected_os}" "${selection}"
+    read -r -p "Enter option number: " selection
+    run_selection "${selection}"
   done
 }
 
 main() {
   ensure_ready
 
-  local detected_os
-  detected_os="$(run_detect_os)"
-  log "Detected OS: ${detected_os}"
-
-  if [[ "${1:-}" == "--gui" ]]; then
-    shift
-    run_gui "$@"
-  fi
-
-  if [[ $# -gt 0 ]]; then
-    run_step "${detected_os}" "$1"
-    exit 0
-  fi
-
-  interactive_menu "${detected_os}"
+  case "${1:-}" in
+    --gui|gui|2)
+      run_gui
+      ;;
+    --tui|tui|1)
+      run_terminal_interface
+      ;;
+    3|0|exit)
+      log "Exiting"
+      exit 0
+      ;;
+    "")
+      interactive_menu
+      ;;
+    *)
+      run_selection "$1"
+      ;;
+  esac
 }
 
 main "$@"

@@ -4,12 +4,17 @@ import argparse
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
-from .inventory import inventory_applications, map_applications_to_cves
+from .inventory import (
+    assess_processes,
+    inventory_applications,
+    inventory_running_processes,
+    map_applications_to_cves,
+)
 from .models import CheckResult
 from .nvd import fetch_related_cves
 from .reporting import export_report_bundle, render_json_report, render_text_report
 from .remediation import write_remediation_script
-from .system_checks import detect_platform, run_audit
+from .system_checks import detect_os_info, detect_platform, run_audit
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -112,12 +117,18 @@ def main() -> int:
         _attach_cves(results, max(1, args.results_per_finding))
 
     application_findings = None
+    applications = None
+    processes = None
+    process_findings = None
     if args.scan_apps:
         applications = inventory_applications(target_os, limit=max(1, args.app_limit))
+        processes = inventory_running_processes(target_os, limit=100)
+        process_findings = assess_processes(processes)
         try:
             application_findings = map_applications_to_cves(applications)
         except (HTTPError, URLError, TimeoutError, OSError):
             application_findings = []
+    os_info = detect_os_info()
 
     failed_results: list[CheckResult] = [result for _, result in results if result.status == "fail"]
     remediation_path = None
@@ -125,13 +136,46 @@ def main() -> int:
         remediation_path = write_remediation_script(args.output_dir, target_os, failed_results)
 
     if args.save_to_desktop:
-        exported = export_report_bundle(target_os, results, remediation_path, application_findings)
+        exported = export_report_bundle(
+            target_os,
+            results,
+            remediation_path,
+            application_findings,
+            scanned_applications=applications,
+            os_info=os_info,
+            scanned_processes=processes,
+            process_findings=process_findings,
+        )
         print(f"Saved reports to Desktop: {exported['text_report']}")
 
     if args.format == "json":
-        print(render_json_report(target_os, results, remediation_path, application_findings), end="")
+        print(
+            render_json_report(
+                target_os,
+                results,
+                remediation_path,
+                application_findings,
+                scanned_applications=applications,
+                os_info=os_info,
+                scanned_processes=processes,
+                process_findings=process_findings,
+            ),
+            end="",
+        )
     else:
-        print(render_text_report(target_os, results, remediation_path, application_findings), end="")
+        print(
+            render_text_report(
+                target_os,
+                results,
+                remediation_path,
+                application_findings,
+                scanned_applications=applications,
+                os_info=os_info,
+                scanned_processes=processes,
+                process_findings=process_findings,
+            ),
+            end="",
+        )
     return 0
 
 
