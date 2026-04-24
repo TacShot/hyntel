@@ -276,7 +276,13 @@ def _windows_firewall(runner: CommandRunner) -> CheckResult:
     output = result.stdout.strip()
     if result.returncode == 127:
         return _skip_result("windows_firewall_enabled", "powershell.exe is not available.")
-    enabled_count = output.lower().count('"enabled":true')
+    try:
+        profiles = json.loads(output)
+        if isinstance(profiles, dict):
+            profiles = [profiles]
+        enabled_count = sum(1 for p in profiles if p.get("Enabled") in (True, 1))
+    except (json.JSONDecodeError, AttributeError):
+        enabled_count = 0
     if enabled_count >= 3:
         return _pass_result("windows_firewall_enabled", "All Windows Firewall profiles are enabled.", output)
     return _fail_result("windows_firewall_enabled", "One or more Windows Firewall profiles are disabled.", output or result.stderr)
@@ -321,8 +327,27 @@ def _windows_defender_realtime(runner: CommandRunner) -> CheckResult:
     return _fail_result("windows_defender_realtime_enabled", "Microsoft Defender real-time monitoring is disabled.", output or result.stderr)
 
 
-def _classify_driver(is_signed: bool, signer: str | None) -> tuple[str, bool, bool]:
+# Known Windows virtual/software drivers that have no WMI signer metadata
+# but are built-in and safe — whitelisted to avoid false positives.
+_KNOWN_SAFE_DRIVERS: set[str] = {
+    "bluetooth peripheral device",
+    "rfcomm com",
+    "btfastpair",
+    "btnotifyr",
+    "nearbysharing",
+    "watch",
+    "besota",
+    "sms/mms",
+    "jl_spp",
+    "oppointeraction",
+}
+
+
+def _classify_driver(is_signed: bool, signer: str | None, name: str = "") -> tuple[str, bool, bool]:
     """Return (sign_type, is_suspicious, is_dangerous) for a driver."""
+    # Whitelist known safe Windows virtual drivers with no WMI signer metadata
+    if name.lower() in _KNOWN_SAFE_DRIVERS:
+        return "microsoft", False, False
     if not is_signed or not signer:
         return "unsigned", True, True
     signer_lower = signer.lower()
@@ -356,7 +381,7 @@ def get_windows_drivers(runner: CommandRunner) -> list[DriverInfo]:
         is_signed = bool(item.get("IsSigned"))
         signer = str(item.get("Signer") or "").strip() or None
         inf_name = str(item.get("InfName") or "").strip() or None
-        sign_type, is_suspicious, is_dangerous = _classify_driver(is_signed, signer)
+        sign_type, is_suspicious, is_dangerous = _classify_driver(is_signed, signer, name)
         drivers.append(
             DriverInfo(
                 name=name,
@@ -384,8 +409,8 @@ def _windows_driver_check(runner: CommandRunner) -> CheckResult:
     if not drivers:
         return _skip_result("windows_driver_signing", "No driver signing data could be retrieved.")
 
-    dangerous = [d for d in drivers if d.is_dangerous]
-    suspicious = [d for d in drivers if d.is_suspicious and not d.is_dangerous]
+    dangerous = [d for d in drivers if d.is_dangerous and d.inf_name]
+    suspicious = [d for d in drivers if d.is_suspicious and not d.is_dangerous and d.inf_name]
     total = len(drivers)
 
     parts: list[str] = [f"Total drivers: {total}."]

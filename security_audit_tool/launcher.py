@@ -40,3 +40,7 @@ def main() -> int:
     from .terminal_ui import main as terminal_main
 
     return terminal_main()
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

@@ -16,12 +16,16 @@ function Ensure-Ready {
 
 function Invoke-TerminalInterface {
     Write-Log "Launching the terminal interface"
+    $env:PYTHONIOENCODING = "utf-8"
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     & $VenvPython -m security_audit_tool.terminal_ui
     exit $LASTEXITCODE
 }
 
 function Invoke-AuditGui {
     Write-Log "Launching the GUI"
+    $env:PYTHONIOENCODING = "utf-8"          # ← ADDED THIS
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8  # ← ADDED THIS
     & $VenvPython -m security_audit_tool.launcher
     exit $LASTEXITCODE
 }

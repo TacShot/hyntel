@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import platform
 import re
+import time
 
 from .models import (
     ApplicationFinding,
@@ -157,7 +158,10 @@ def map_applications_to_cves(
         if not version_token:
             continue
 
-        cpes = search_cpes(app.name, limit=cpe_limit)
+        try:
+            cpes = search_cpes(app.name, limit=cpe_limit, timeout=8)
+        except Exception:
+            continue
         if not cpes:
             continue
 
@@ -177,9 +181,14 @@ def map_applications_to_cves(
         if not selected_cpe:
             continue
 
-        cves = fetch_cves_by_cpe(selected_cpe, limit=cve_limit)
+        try:
+            cves = fetch_cves_by_cpe(selected_cpe, limit=cve_limit, timeout=8)
+        except Exception:
+            continue
         if cves:
             findings.append(ApplicationFinding(application=app, cpe_name=selected_cpe, cves=cves))
+
+        time.sleep(0.3)  # Respect NVD rate limit (5 req/sec without API key)
     return findings
 
 

@@ -80,26 +80,27 @@ function Resolve-Python {
 function Invoke-Python {
     param(
         [string]$PythonCommand,
-        [string[]]$Args
+        [string[]]$PythonArgs
     )
 
     if ($PythonCommand -eq "python") {
-        & python @Args
+        & python @PythonArgs
         return
     }
 
-    & py -3 @Args
+    & py -3 @PythonArgs
 }
 
 function Setup-Venv {
     param([string]$PythonCommand)
 
     Write-Log "Creating virtual environment in $RootDir\.venv"
-    Invoke-Python -PythonCommand $PythonCommand -Args @("-m", "venv", "$RootDir\.venv")
+    Invoke-Python -PythonCommand $PythonCommand -PythonArgs @("-m", "venv", "$RootDir\.venv")
 
+    $PythonExe = Join-Path $RootDir ".venv\Scripts\python.exe"
     Write-Log "Installing project in editable mode"
-    & "$RootDir\.venv\Scripts\python.exe" -m pip install --upgrade pip
-    & "$RootDir\.venv\Scripts\python.exe" -m pip install -e $RootDir
+    & $PythonExe -m pip install --upgrade pip
+    & $PythonExe -m pip install -e $RootDir
 }
 
 Install-Python
