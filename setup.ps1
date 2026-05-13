@@ -69,11 +69,8 @@ function Resolve-Python {
         }
     }
 
-    if (Test-Command "py") {
-        try {
-            $null = & py -3 -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>&1
-            if ($LASTEXITCODE -eq 0) { return "py -3" }
-        } catch {}
+    if (-not (Test-Command "winget")) {
+        throw "winget is required on Windows to install Python automatically. Please install Python manually from https://www.python.org/downloads/"
     }
 
     if (Test-Command "python") {
@@ -95,31 +92,39 @@ function Install-Python-Via-Winget {
         "Python.Python.3.9"
     )
     foreach ($packageId in $packageIds) {
-        Write-Log "Trying to install Python via winget: $packageId"
-        try {
-            winget install --id $packageId --exact --accept-package-agreements --accept-source-agreements
-            if ($LASTEXITCODE -eq 0) {
-                Refresh-Path
-                if (Test-Python3) {
-                    Write-Log "Python installed successfully via winget."
-                    return $true
-                }
+        Write-Log "Trying to install Python with winget package $packageId"
+        $installResult = winget install --id $packageId --exact --accept-package-agreements --accept-source-agreements 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            # Refresh PATH to include newly installed Python
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+            # Give the system a moment to recognize the new installation
+            Start-Sleep -Seconds 2
+
+            if (Test-Python3) {
+                Write-Log "Python 3 installed successfully"
+                return
             }
-        } catch {}
+        }
     }
-    return $false
+
+    throw "winget could not install a supported Python 3 package automatically. Please install Python manually from https://www.python.org/downloads/"
 }
 
-function Install-Python-Via-Web {
-    Write-Log "Downloading Python installer from python.org..."
-    $pythonUrl = "https://www.python.org/ftp/python/3.12.9/python-3.12.9-amd64.exe"
-    $installerPath = "$env:TEMP\python_installer.exe"
+function Test-Python3 {
+    if (Test-Command "py") {
+        $output = & py -3 -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+    }
 
-    Write-Log "Downloading from $pythonUrl (this may take a minute)..."
-    Invoke-WebRequest -Uri $pythonUrl -OutFile $installerPath -UseBasicParsing
-
-    Write-Log "Running Python installer silently..."
-    Start-Process -FilePath $installerPath -ArgumentList "/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_launcher=1" -Wait
+    if (Test-Command "python") {
+        $output = & python -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+    }
 
     Remove-Item $installerPath -Force
     Refresh-Path
@@ -131,20 +136,19 @@ function Install-Python-Via-Web {
     return $false
 }
 
-function Install-Python {
-    if (Test-Python3) {
-        Write-Log "Python 3 is already installed."
-        return
+function Resolve-Python {
+    if (Test-Command "py") {
+        $output = & py -3 -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return "py -3"
+        }
     }
 
-    Write-Log "Python 3 not found. Attempting automatic installation..."
-
-    if (Test-Command "winget") {
-        $success = Install-Python-Via-Winget
-        if ($success) { return }
-        Write-Log "winget install did not result in a working Python. Trying direct download..."
-    } else {
-        Write-Log "winget not available. Trying direct download..."
+    if (Test-Command "python") {
+        $output = & python -c "import sys; raise SystemExit(0 if sys.version_info.major == 3 else 1)" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return "python"
+        }
     }
 
     $success = Install-Python-Via-Web
@@ -172,17 +176,38 @@ function Invoke-Python {
 function Setup-Venv {
     param([string]$PythonCommand)
     Write-Log "Creating virtual environment in $RootDir\.venv"
-    Invoke-Python -PythonCommand $PythonCommand -PythonArgs @("-m", "venv", "$RootDir\.venv")
+    $venvResult = Invoke-Python -PythonCommand $PythonCommand -PythonArgs @("-m", "venv", "$RootDir\.venv") 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create virtual environment. Make sure Python 3 includes the venv module. Error: $venvResult"
+    }
+
     $PythonExe = Join-Path $RootDir ".venv\Scripts\python.exe"
+    if (-not (Test-Path $PythonExe)) {
+        throw "Virtual environment creation did not produce $PythonExe"
+    }
+
     Write-Log "Installing project in editable mode"
     & $PythonExe -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to upgrade pip in virtual environment"
+    }
+
     & $PythonExe -m pip install -e $RootDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install project in virtual environment"
+    }
 }
 
-# --- Main ---
-Install-Python
-$pythonCommand = Resolve-Python
-Setup-Venv $pythonCommand
-Write-Log "Setup complete"
-Write-Log "Run audits with: .\audit.ps1"
-Write-Log "Launch GUI with: .\audit.ps1 --gui"
+try {
+    Install-Python
+    $pythonCommand = Resolve-Python
+    Setup-Venv $pythonCommand
+
+    Write-Log "Setup complete"
+    Write-Log "Run audits with: .\audit.ps1"
+    Write-Log "Launch GUI with: .\audit.ps1 --gui"
+} catch {
+    Write-Error "Setup failed: $_"
+    Write-Host "Please install Python 3 manually from https://www.python.org/downloads/ and run this script again."
+    exit 1
+}
