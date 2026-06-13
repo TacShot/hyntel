@@ -222,6 +222,32 @@ Recommended wrapper:
 ./audit.sh
 ```
 
+The wrapper attempts to launch the GUI first, and falls back to the interactive terminal interface if the GUI is unavailable.
+
+### Interactive Terminal Interface (Default)
+
+The `security-audit` command defaults to interactive mode, prompting users for scan options:
+
+```bash
+# Prompts for scan configuration (target OS, CVE inclusion, remediation, etc.)
+security-audit
+
+# Equivalent to:
+security-audit --interactive  # Kept for backward compatibility
+```
+
+### Argument-Based Mode (For Scripting/Automation)
+
+Use `--use-args` for traditional command-line argument mode (useful for automation):
+
+```bash
+# Use arguments instead of prompts (for scripting/automation)
+security-audit --use-args --format json --include-cves
+
+# Or via wrapper when GUI is unavailable:
+./audit.sh --use-args --format json --include-cves
+```
+
 ### Save Reports
 
 The terminal interface prompts for the report location. The default path is:
@@ -233,19 +259,26 @@ The terminal interface prompts for the report location. The default path is:
 ### JSON Output
 
 ```bash
-./audit.sh --format json
+security-audit --format json
 ```
 
 ### Include Related CVEs
 
 ```bash
-./audit.sh --include-cves
+security-audit --include-cves
 ```
 
 ### Scan Installed Applications for CVEs
 
 ```bash
+# Via wrapper (falls back to terminal interface if GUI unavailable)
+./audit.sh --scan-apps
+
+# Direct executable (prompts interactively by default)
 ./.venv/bin/security-audit --scan-apps
+
+# Argument-based mode (for automation)
+./.venv/bin/security-audit --use-args --scan-apps
 ```
 
 This inventories installed applications from the local package manager or operating-system registry, derives candidate CPE matches from NVD, queries CVEs tied to the matched product/version, and reviews running processes for suspicious indicators.
@@ -253,13 +286,17 @@ This inventories installed applications from the local package manager or operat
 ### Generate Remediation Script
 
 ```bash
-./audit.sh
+security-audit
 ```
 
 ### Full Example
 
 ```bash
+# Interactive mode (prompts for all options)
 ./.venv/bin/security-audit --include-cves --scan-apps --format json
+
+# Argument-based mode
+./.venv/bin/security-audit --use-args --include-cves --scan-apps --format json
 ```
 
 ### Launch the GUI Executable

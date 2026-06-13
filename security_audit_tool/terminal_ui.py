@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
@@ -345,7 +346,60 @@ def main() -> int:
 
     w = _term_width()
 
-    default_report_dir = str(Path.home() / "Desktop" / "SecurityAuditReports")
+    # Scan type selection
+    print(
+        _single_box(
+            "SCAN TYPE SELECTION",
+            [
+                "Select the type of security audit to perform:",
+                "",
+                "1) General Security Audit",
+                "2) PCI DSS Compliance Audit",
+                "3) HIPAA Compliance Audit",
+                "4) ISO 27001 Compliance Audit",
+                "",
+                "Enter the number of your selection (1-4):",
+            ],
+            width=w,
+        )
+    )
+    print()
+
+    # Map selection to standards
+    standards_map = {
+        "1": [],  # General (no specific standards)
+        "2": ["PCI_DSS"],
+        "3": ["HIPAA"],
+        "4": ["ISO27001"]
+    }
+
+    selected_standard = None
+    while selected_standard not in standards_map:
+        try:
+            raw = input("  Scan type selection [1-4]: ").strip()
+            if raw in standards_map:
+                selected_standard = raw
+                break
+            else:
+                print(f"{RED}  Invalid selection. Please enter 1, 2, 3, or 4.{RESET}")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            selected_standard = "1"  # Default to General
+            break
+
+    standards = standards_map[selected_standard]
+    standard_names = {
+        "1": "General Security Audit",
+        "2": "PCI DSS Compliance Audit",
+        "3": "HIPAA Compliance Audit",
+        "4": "ISO 27001 Compliance Audit"
+    }
+    selected_standard_name = standard_names[selected_standard]
+
+    print(f"{GREEN}  Selected: {selected_standard_name}{RESET}")
+    print()
+
+    default_report_dir = str(Path.home() / "Desktop" / "Hyntel Report")
     print(
         _single_box(
             "SCAN CONFIGURATION",
@@ -363,13 +417,16 @@ def main() -> int:
     include_cves = _prompt_bool("Include NVD CVE lookup", False)
     generate_remediation = _prompt_bool("Generate remediation script", True)
     scan_apps = _prompt_bool("Scan installed applications and running processes", True)
+    default_remediation_dir = str(Path.cwd() / "artifacts")
+    remediation_dir = Path(_prompt_text("Remediation script directory", default_remediation_dir)).expanduser()
     report_dir = Path(_prompt_text("Save reports to", default_report_dir)).expanduser()
+    save_reports = _prompt_bool("Export audit reports", True)
     print()
 
     # Running audit
     print(f"{BOLD}{CYAN}⟳  Running security audit for {target_os}...{RESET}\n")
 
-    results = run_audit(target_os)
+    results = run_audit(target_os, standards=standards if standards else None)
 
     if include_cves:
         print(f"{DIM}  Querying NIST NVD for related CVEs...{RESET}")
@@ -409,7 +466,7 @@ def main() -> int:
     remediation_path = None
     if generate_remediation and failed_results:
         try:
-            remediation_path = write_remediation_script(Path("artifacts"), target_os, failed_results)
+            remediation_path = write_remediation_script(remediation_dir, target_os, failed_results)
             print(f"{GREEN}  Remediation script generated: {remediation_path}{RESET}\n")
         except Exception as exc:
             print(f"{AMBER}  Warning: could not write remediation script: {exc}{RESET}\n")
@@ -424,29 +481,54 @@ def main() -> int:
     if drivers:
         _print_driver_info(drivers)
 
-    # Export reports
-    try:
-        exported = export_report_bundle(
-            target_os,
-            results,
-            remediation_path,
-            application_findings,
-            desktop_base=report_dir,
-            scanned_applications=applications or None,
-            os_info=os_info,
-            scanned_processes=processes or None,
-            process_findings=process_findings,
-        )
-        lines = [
-            f"Text report : {exported['text_report']}",
-            f"JSON report : {exported['json_report']}",
-            f"CSV report  : {exported['csv_report']}",
-        ]
-        if remediation_path:
-            lines.append(f"Remediation : {remediation_path}")
-        _safe_print(_single_box("EXPORTED REPORTS", lines, width=w))
-    except Exception as exc:
-        print(f"{AMBER}Warning: report export failed: {exc}{RESET}")
+    # Export reports (only if user chose to save them)
+    if save_reports:
+        try:
+            # Create timestamped subdirectory under Hyntel Report
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            export_base = report_dir / timestamp
+            export_base.mkdir(parents=True, exist_ok=True)
+
+            exported = export_report_bundle(
+                target_os,
+                results,
+                None,  # We'll handle remediation separately to put it in same folder
+                application_findings,
+                desktop_base=export_base,
+                scanned_applications=applications or None,
+                os_info=os_info,
+                scanned_processes=processes or None,
+                process_findings=process_findings,
+            )
+
+            # Generate remediation script in the same directory as reports
+            final_remediation_path = None
+            if generate_remediation and failed_results:
+                try:
+                    final_remediation_path = write_remediation_script(export_base, target_os, failed_results)
+                    print(f"{GREEN}  Remediation script generated: {final_remediation_path}{RESET}\n")
+                except Exception as exc:
+                    print(f"{AMBER}  Warning: could not write remediation script: {exc}{RESET}\n")
+
+            lines = [
+                f"Text report : {exported['text_report']}",
+                f"JSON report : {exported['json_report']}",
+                f"CSV report  : {exported['csv_report']}",
+            ]
+            if final_remediation_path:
+                lines.append(f"Remediation : {final_remediation_path}")
+            _safe_print(_single_box("EXPORTED REPORTS", lines, width=w))
+        except Exception as exc:
+            print(f"{AMBER}Warning: report export failed: {exc}{RESET}")
+    else:
+        print(f"{DIM}  Report export skipped as per user choice.{RESET}")
+        # Still generate remediation script if requested, but in the remediation directory
+        if generate_remediation and failed_results:
+            try:
+                remediation_path = write_remediation_script(remediation_dir, target_os, failed_results)
+                print(f"{GREEN}  Remediation script generated: {remediation_path}{RESET}\n")
+            except Exception as exc:
+                print(f"{AMBER}  Warning: could not write remediation script: {exc}{RESET}\n")
 
     print()
     return 0
