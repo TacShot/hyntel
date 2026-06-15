@@ -82,7 +82,9 @@ flowchart TD
 
 ### Stage 1: Setup
 
-The setup scripts accept any installed Python 3 interpreter. If Python 3 is not available, they install it using the host package manager and then create a local virtual environment.
+The setup scripts accept any installed Python 3 interpreter. If Python 3 is not available, they install it using the host package manager and then create a local virtual environment. During setup they also verify Tkinter GUI support and warn if the GUI cannot be launched with the detected Python.
+
+After installing the project into `.venv`, setup checks for outdated Python packages inside that virtual environment. You can update all listed packages, or enter package numbers to skip from the update prompt. Enter `0` when you do not want to skip any listed package.
 
 #### Linux or macOS
 

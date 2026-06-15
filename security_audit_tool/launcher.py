@@ -1,24 +1,33 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 import traceback
 
 
 def _tk_probe() -> tuple[bool, str | None]:
     """Return whether tkinter can open a real display window and why not if it can't."""
+    probe = (
+        "import tkinter as tk\n"
+        "root = tk.Tk()\n"
+        "root.withdraw()\n"
+        "root.update_idletasks()\n"
+        "root.update()\n"
+        "root.destroy()\n"
+    )
     try:
-        import tkinter as tk
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
     except Exception as exc:
-        return False, f"tkinter import failed: {exc}"
+        return False, f"tkinter probe failed: {exc}"
 
-    try:
-        root = tk.Tk()
-        root.withdraw()
-        root.update_idletasks()
-        root.update()
-        root.destroy()
-    except Exception as exc:
-        return False, str(exc)
+    if completed.returncode != 0:
+        reason = (completed.stderr or completed.stdout or "tkinter probe exited unexpectedly").strip()
+        return False, reason
     return True, None
 
 

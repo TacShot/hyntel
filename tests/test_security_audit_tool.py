@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1486,6 +1487,26 @@ class TestAttachCves(unittest.TestCase):
         with patch("security_audit_tool.cli.fetch_related_cves") as mock_fetch:
             self._attach_cves([(rule, result)], per_finding=1)
         mock_fetch.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# launcher – GUI fallback
+# ---------------------------------------------------------------------------
+
+class TestLauncher(unittest.TestCase):
+    def test_tk_probe_handles_hard_probe_failure(self):
+        from security_audit_tool.launcher import _tk_probe
+
+        completed = subprocess.CompletedProcess(
+            args=["python", "-c", "probe"],
+            returncode=134,
+            stdout="",
+            stderr="",
+        )
+        with patch("security_audit_tool.launcher.subprocess.run", return_value=completed):
+            available, reason = _tk_probe()
+        self.assertFalse(available)
+        self.assertEqual(reason, "tkinter probe exited unexpectedly")
 
 
 # ---------------------------------------------------------------------------
