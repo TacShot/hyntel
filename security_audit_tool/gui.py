@@ -4,7 +4,7 @@ import queue
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext
 
 from .cli import _attach_cves
 from .inventory import assess_processes, inventory_applications, inventory_running_processes, map_applications_to_cves
@@ -54,96 +54,102 @@ class SecurityAuditGUI:
         self.root.after(150, self._poll_queue)
 
     def _configure_style(self) -> None:
-        style = ttk.Style()
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-
-        style.configure("Retro.TFrame", background=RETRO_BG)
-        style.configure("Panel.TFrame", background=RETRO_PANEL, borderwidth=1, relief="solid")
-        style.configure("Retro.TLabel", background=RETRO_BG, foreground=RETRO_TEXT, font=("Courier", 11))
-        style.configure("Header.TLabel", background=RETRO_BG, foreground=RETRO_TEXT, font=("Courier", 18, "bold"))
-        style.configure("PanelTitle.TLabel", background=RETRO_PANEL, foreground=RETRO_TEXT, font=("Courier", 12, "bold"))
-        style.configure(
-            "Retro.TButton",
-            background=RETRO_PANEL,
-            foreground=RETRO_TEXT,
-            font=("Courier", 10, "bold"),
-            padding=8,
-        )
-        style.map("Retro.TButton", background=[("active", "#1a271d")], foreground=[("disabled", RETRO_MUTED)])
-        style.configure(
-            "Retro.TRadiobutton",
-            background=RETRO_BG,
-            foreground=RETRO_TEXT,
-            font=("Courier", 10),
-        )
-        style.map("Retro.TRadiobutton", background=[("active", RETRO_BG)])
-        style.configure(
-            "Retro.TCheckbutton",
-            background=RETRO_BG,
-            foreground=RETRO_TEXT,
-            font=("Courier", 10),
-        )
-        style.map("Retro.TCheckbutton", background=[("active", RETRO_BG)])
+        self.label_options = {
+            "bg": RETRO_BG,
+            "fg": RETRO_TEXT,
+            "font": ("Courier", 11),
+        }
+        self.panel_label_options = {
+            "bg": RETRO_PANEL,
+            "fg": RETRO_TEXT,
+            "font": ("Courier", 12, "bold"),
+        }
+        self.choice_options = {
+            "bg": RETRO_PANEL,
+            "fg": RETRO_TEXT,
+            "activebackground": RETRO_PANEL,
+            "activeforeground": RETRO_TEXT,
+            "selectcolor": RETRO_BG,
+            "font": ("Courier", 10),
+            "borderwidth": 0,
+            "highlightthickness": 0,
+        }
+        self.button_options = {
+            "bg": RETRO_PANEL,
+            "fg": RETRO_TEXT,
+            "activebackground": "#1a271d",
+            "activeforeground": RETRO_TEXT,
+            "font": ("Courier", 10, "bold"),
+            "borderwidth": 1,
+            "highlightthickness": 1,
+            "highlightbackground": RETRO_MUTED,
+            "highlightcolor": RETRO_TEXT,
+            "padx": 10,
+            "pady": 6,
+        }
 
     def _build_layout(self) -> None:
-        outer = ttk.Frame(self.root, style="Retro.TFrame", padding=18)
+        outer = tk.Frame(self.root, bg=RETRO_BG, padx=18, pady=18)
         outer.pack(fill="both", expand=True)
 
-        header = ttk.Label(outer, text="SECURITY AUDIT TERMINAL", style="Header.TLabel")
+        header = tk.Label(
+            outer,
+            text="SECURITY AUDIT TERMINAL",
+            bg=RETRO_BG,
+            fg=RETRO_TEXT,
+            font=("Courier", 18, "bold"),
+        )
         header.pack(anchor="w")
 
-        subtitle = ttk.Label(
+        subtitle = tk.Label(
             outer,
             text="Cross-platform security configuration scanning with Desktop report export",
-            style="Retro.TLabel",
+            **self.label_options,
         )
         subtitle.pack(anchor="w", pady=(4, 14))
 
-        control_panel = ttk.Frame(outer, style="Panel.TFrame", padding=14)
+        control_panel = tk.Frame(outer, bg=RETRO_PANEL, padx=14, pady=14, highlightthickness=1, highlightbackground=RETRO_MUTED)
         control_panel.pack(fill="x")
 
-        ttk.Label(control_panel, text="TARGET OS", style="PanelTitle.TLabel").grid(row=0, column=0, sticky="w")
+        tk.Label(control_panel, text="TARGET OS", **self.panel_label_options).grid(row=0, column=0, sticky="w")
         for idx, option in enumerate(("auto", "linux", "macos", "windows")):
-            ttk.Radiobutton(
+            tk.Radiobutton(
                 control_panel,
                 text=option.upper(),
                 value=option,
                 variable=self.target_os_var,
-                style="Retro.TRadiobutton",
+                **self.choice_options,
             ).grid(row=1, column=idx, sticky="w", padx=(0, 14), pady=(8, 8))
 
-        ttk.Checkbutton(
+        tk.Checkbutton(
             control_panel,
             text="INCLUDE NVD CVE LOOKUP",
             variable=self.include_cves_var,
-            style="Retro.TCheckbutton",
+            **self.choice_options,
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=4)
 
-        ttk.Checkbutton(
+        tk.Checkbutton(
             control_panel,
             text="GENERATE REMEDIATION SCRIPT",
             variable=self.generate_remediation_var,
-            style="Retro.TCheckbutton",
+            **self.choice_options,
         ).grid(row=2, column=2, columnspan=2, sticky="w", pady=4)
-        ttk.Checkbutton(
+        tk.Checkbutton(
             control_panel,
             text="SCAN INSTALLED APPS FOR CVES",
             variable=self.scan_apps_var,
-            style="Retro.TCheckbutton",
+            **self.choice_options,
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=4)
 
-        button_row = ttk.Frame(control_panel, style="Panel.TFrame", padding=0)
+        button_row = tk.Frame(control_panel, bg=RETRO_PANEL)
         button_row.grid(row=4, column=0, columnspan=4, sticky="w", pady=(14, 4))
-        ttk.Button(button_row, text="RUN AUDIT", style="Retro.TButton", command=self._start_audit).pack(side="left", padx=(0, 10))
-        ttk.Button(button_row, text="SAVE REPORTS AGAIN", style="Retro.TButton", command=self._save_reports_again).pack(side="left")
+        tk.Button(button_row, text="RUN AUDIT", command=self._start_audit, **self.button_options).pack(side="left", padx=(0, 10))
+        tk.Button(button_row, text="SAVE REPORTS AGAIN", command=self._save_reports_again, **self.button_options).pack(side="left")
 
-        info_bar = ttk.Frame(outer, style="Retro.TFrame")
+        info_bar = tk.Frame(outer, bg=RETRO_BG)
         info_bar.pack(fill="x", pady=(14, 10))
-        ttk.Label(info_bar, textvariable=self.status_var, style="Retro.TLabel").pack(side="left")
-        ttk.Label(info_bar, textvariable=self.export_var, style="Retro.TLabel").pack(side="right")
+        tk.Label(info_bar, textvariable=self.status_var, **self.label_options).pack(side="left")
+        tk.Label(info_bar, textvariable=self.export_var, **self.label_options).pack(side="right")
 
         self.output = scrolledtext.ScrolledText(
             outer,
