@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
+*.pyo
 
 # C extensions
 *.so
@@ -36,6 +38,7 @@ share/python-wheels/
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+*.log
 
 # Unit test / coverage reports
 htmlcov/
@@ -47,14 +50,13 @@ htmlcov/
 nosetests.xml
 coverage.xml
 *.cover
-*.py,cover
 .hypothesis/
 .pytest_cache/
 .gitlab-ci.yml
 
 # Environments
 .env
-.venv
+.venv/
 env/
 venv/
 ENV/
@@ -72,6 +74,13 @@ venv.bak/
 .DS_Store
 Thumbs.db
 
+# Claude Code artifacts
+.claude/
+
 # Project specific
 artifacts/
 VERIFICATION_SUMMARY.md
+
+# Desktop-exported audit reports (may contain sensitive host details)
+SecurityAuditReports/
+Hyntel Report/
