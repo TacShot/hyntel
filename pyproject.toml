@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,10 +7,10 @@ name = "security-audit-tool"
 version = "0.1.0"
 description = "Cross-platform system security configuration auditing CLI for Linux, macOS, and Windows."
 readme = "README.md"
-requires-python = ">=3.7"
-license = { text = "MIT" }
+requires-python = ">=3.9"
+license = "MIT"
 authors = [
-  { name = "OpenAI Codex" }
+  { name = "TacShot", email = "sarthak0111204@gmail.com" }
 ]
 dependencies = []
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import platform
 import shutil
-import subprocess
+import subprocess  # nosec B404 - Used with fixed args, no user input
 from dataclasses import replace
 
 from .models import AuditRule, CVEQuery, CheckResult, CommandResult, DriverInfo, OsInfo
@@ -17,6 +17,7 @@ class CommandRunner:
                 capture_output=True,
                 text=True,
                 check=False,
+                shell=False,  # nosec B603 - Intentional shell=False for safety
             )
         except FileNotFoundError:
             return CommandResult(returncode=127, stdout="", stderr="command not found")
@@ -66,20 +67,28 @@ def _detect_macos_os_info() -> OsInfo:
     build = None
     product_name = "macOS"
     try:
-        sw_product_name = subprocess.run(
-            ["sw_vers", "-productName"],
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-        if sw_product_name:
-            product_name = sw_product_name
-        build = subprocess.run(
-            ["sw_vers", "-buildVersion"],
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip() or None
+        sw_vers_path = shutil.which("sw_vers")
+        if sw_vers_path is not None:
+            sw_product_name = subprocess.run(
+                [sw_vers_path, "-productName"],
+                capture_output=True,
+                text=True,
+                check=False,
+                shell=False,  # nosec B603 - Intentional shell=False for safety
+            ).stdout.strip()
+            if sw_product_name:
+                product_name = sw_product_name
+            build = subprocess.run(
+                [sw_vers_path, "-buildVersion"],
+                capture_output=True,
+                text=True,
+                check=False,
+                shell=False,  # nosec B603 - Intentional shell=False for safety
+            ).stdout.strip() or None
+        else:
+            # Handle missing sw_vers appropriately
+            sw_product_name = ""
+            build = None
     except OSError:
         product_name = "macOS"
     return OsInfo(
@@ -457,6 +466,7 @@ RULES: list[AuditRule] = [
             "sudo systemctl enable --now firewalld",
         ],
         cve_queries=[CVEQuery(keyword="linux firewall exposed service remote code execution")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="linux_sshd_root_login_disabled",
@@ -471,6 +481,7 @@ RULES: list[AuditRule] = [
             "sudo systemctl restart sshd",
         ],
         cve_queries=[CVEQuery(keyword="OpenSSH privilege escalation authentication bypass root login")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="linux_sshd_password_auth_disabled",
@@ -485,6 +496,7 @@ RULES: list[AuditRule] = [
             "sudo systemctl restart sshd",
         ],
         cve_queries=[CVEQuery(keyword="OpenSSH password authentication brute force vulnerability")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="linux_auto_updates_enabled",
@@ -499,6 +511,7 @@ RULES: list[AuditRule] = [
             "sudo systemctl enable --now dnf-automatic.timer",
         ],
         cve_queries=[CVEQuery(keyword="linux kernel privilege escalation local vulnerability")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="macos_firewall_enabled",
@@ -512,6 +525,7 @@ RULES: list[AuditRule] = [
             "sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on",
         ],
         cve_queries=[CVEQuery(keyword="macOS remote service vulnerability firewall exposure")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="macos_filevault_enabled",
@@ -525,6 +539,7 @@ RULES: list[AuditRule] = [
             "sudo fdesetup enable",
         ],
         cve_queries=[CVEQuery(keyword="macOS data exposure encryption bypass")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="macos_remote_login_disabled",
@@ -538,6 +553,7 @@ RULES: list[AuditRule] = [
             "sudo systemsetup -setremotelogin off",
         ],
         cve_queries=[CVEQuery(keyword="OpenSSH macOS remote login vulnerability")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="macos_auto_updates_enabled",
@@ -551,6 +567,7 @@ RULES: list[AuditRule] = [
             "sudo softwareupdate --schedule on",
         ],
         cve_queries=[CVEQuery(keyword="macOS privilege escalation vulnerability security update")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="windows_firewall_enabled",
@@ -564,6 +581,7 @@ RULES: list[AuditRule] = [
             "Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True",
         ],
         cve_queries=[CVEQuery(keyword="Windows remote code execution exposed service firewall")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="windows_bitlocker_enabled",
@@ -577,6 +595,7 @@ RULES: list[AuditRule] = [
             "Enable-BitLocker -MountPoint 'C:' -EncryptionMethod XtsAes256 -UsedSpaceOnly",
         ],
         cve_queries=[CVEQuery(keyword="Windows data exposure encryption bypass")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="windows_rdp_disabled",
@@ -590,6 +609,7 @@ RULES: list[AuditRule] = [
             "Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name 'fDenyTSConnections' -Value 1",
         ],
         cve_queries=[CVEQuery(keyword="Windows Remote Desktop remote code execution")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="windows_defender_realtime_enabled",
@@ -603,6 +623,7 @@ RULES: list[AuditRule] = [
             "Set-MpPreference -DisableRealtimeMonitoring $false",
         ],
         cve_queries=[CVEQuery(keyword="Microsoft Defender bypass vulnerability malware")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
     AuditRule(
         identifier="windows_driver_signing",
@@ -618,6 +639,7 @@ RULES: list[AuditRule] = [
             "Enable Secure Boot and Driver Signature Enforcement via bcdedit /set nointegritychecks off",
         ],
         cve_queries=[CVEQuery(keyword="Windows unsigned driver privilege escalation kernel exploit")],
+        standards=["ISO27001", "HIPAA", "PCI_DSS"],
     ),
 ]
 
@@ -626,10 +648,16 @@ def get_rules(target_platform: str) -> list[AuditRule]:
     return [rule for rule in RULES if rule.platform == target_platform]
 
 
-def run_audit(target_platform: str, runner: CommandRunner | None = None) -> list[tuple[AuditRule, CheckResult]]:
+def run_audit(target_platform: str, runner: CommandRunner | None = None, standards: list[str] | None = None) -> list[tuple[AuditRule, CheckResult]]:
     active_runner = runner or CommandRunner()
     results: list[tuple[AuditRule, CheckResult]] = []
     for rule in get_rules(target_platform):
+        # Filter rules by standards if specified
+        if standards is not None:
+            # If rule has no standards specified, it applies to all (backward compatibility)
+            # Otherwise, check if any of the specified standards match the rule's standards
+            if rule.standards and not any(s in rule.standards for s in standards):
+                continue
         raw_result = rule.check(active_runner)
         results.append((rule, replace(raw_result, remediation=rule.remediation)))
     return results

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from .models import CVEQuery
@@ -13,11 +13,16 @@ NVD_CPE_API = "https://services.nvd.nist.gov/rest/json/cpes/2.0"
 
 
 def _request_nvd(url: str, api_key: str | None = None, timeout: int = 15) -> dict[str, Any]:
+    # Validate URL scheme
+    parsed = urlparse(url)
+    if parsed.scheme not in ('http', 'https'):
+        raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
+
     request = Request(url, headers={"User-Agent": "security-audit-tool/0.1.0"})
     key = api_key or os.getenv("NVD_API_KEY")
     if key:
         request.add_header("apiKey", key)
-    with urlopen(request, timeout=timeout) as response:
+    with urlopen(request, timeout=timeout) as response:  # nosec B310 - URL scheme validated above
         return json.load(response)
 
 

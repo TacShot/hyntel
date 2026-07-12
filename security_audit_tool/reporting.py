@@ -50,6 +50,8 @@ def render_text_report(
     for rule, result in results:
         lines.append(f"[{result.status.upper()}] {rule.title} ({rule.severity})")
         lines.append(f"  Rule ID: {rule.identifier}")
+        if getattr(rule, "standards", None):
+            lines.append(f"  Standards: {', '.join(rule.standards)}")
         if getattr(rule, "description", None):
             lines.append(f"  What we checked: {rule.description}")
         if getattr(rule, "rationale", None):
@@ -161,6 +163,7 @@ def render_json_report(
                 "observed_value": result.observed_value,
                 "remediation": result.remediation,
                 "related_cves": result.related_cves,
+                "standards": getattr(rule, "standards", []),
             }
             for rule, result in results
         ],

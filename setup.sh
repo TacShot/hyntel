@@ -59,6 +59,117 @@ python_has_module() {
   "$python_cmd" -c "import ${module_name}" >/dev/null 2>&1
 }
 
+ensure_tkinter() {
+  local python_cmd="$1"
+  if python_has_module "$python_cmd" tkinter; then
+    log "Tkinter GUI support available"
+    return
+  fi
+
+  case "$(detect_os)" in
+    linux)
+      if has_command apt-get; then
+        log "Installing Tkinter GUI support with apt"
+        require_sudo apt-get update
+        require_sudo apt-get install -y python3-tk
+      elif has_command pacman; then
+        log "Installing Tk GUI support with pacman"
+        require_sudo pacman -Sy --noconfirm tk
+      fi
+      ;;
+    macos)
+      log "Tkinter is missing. Homebrew or python.org Python normally includes GUI support."
+      ;;
+  esac
+
+  if python_has_module "$python_cmd" tkinter; then
+    log "Tkinter GUI support available"
+  else
+    echo "Warning: Tkinter GUI support is not available for ${python_cmd}." >&2
+    echo "The terminal interface will still work, but ./audit.sh --gui may fall back to terminal mode." >&2
+  fi
+}
+
+print_outdated_packages() {
+  local python_exe="$1"
+  local outdated_json
+  outdated_json="$("$python_exe" -m pip list --outdated --format=json 2>/dev/null)" || return 1
+  printf '%s\n' "$outdated_json" | "$python_exe" -c '
+import json
+import sys
+
+for index, package in enumerate(json.load(sys.stdin), 1):
+    print("{}\t{}\t{}\t{}".format(
+        index,
+        package.get("name", ""),
+        package.get("version", ""),
+        package.get("latest_version", ""),
+    ))
+'
+}
+
+prompt_package_updates() {
+  local python_exe="$1"
+  local package_file
+  package_file="$(mktemp)"
+  if ! print_outdated_packages "$python_exe" > "$package_file"; then
+    echo "Warning: Could not check for outdated Python packages." >&2
+    rm -f "$package_file"
+    return
+  fi
+
+  if [[ ! -s "$package_file" ]]; then
+    log "Python packages are up to date"
+    rm -f "$package_file"
+    return
+  fi
+
+  log "Python package updates are available:"
+  while IFS=$'\t' read -r index name current latest; do
+    printf '  %s) %s %s -> %s\n' "$index" "$name" "$current" "$latest"
+  done < "$package_file"
+
+  local answer answer_normalized exclusions exclude_index package_count
+  package_count="$(wc -l < "$package_file" | tr -d ' ')"
+  printf '\nUpdate all listed Python packages? [y/N]: '
+  read -r answer
+  answer_normalized="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
+  case "$answer_normalized" in
+    y|yes)
+      log "Updating all outdated Python packages"
+      "$python_exe" -m pip install --upgrade $(awk -F '\t' '{print $2}' "$package_file")
+      ;;
+    *)
+      printf 'Enter package numbers to skip from update (1-%s), separated by spaces, or 0 for none: ' "$package_count"
+      read -r exclusions
+      exclusions="${exclusions:-0}"
+      local packages_to_update=()
+      while IFS=$'\t' read -r index name current latest; do
+        local skip=false
+        for exclude_index in $exclusions; do
+          if [[ "$exclude_index" == "$index" ]]; then
+            skip=true
+          fi
+        done
+        if [[ "$skip" == false ]]; then
+          packages_to_update+=("$name")
+        else
+          log "Skipping update for ${name}"
+        fi
+      done < "$package_file"
+
+      if [[ "${#packages_to_update[@]}" -eq 0 ]]; then
+        log "No Python package updates selected"
+      else
+        log "Updating selected Python packages"
+        "$python_exe" -m pip install --upgrade "${packages_to_update[@]}"
+      fi
+      ;;
+  esac
+
+  rm -f "$package_file"
+}
+
 install_python_linux() {
   if resolve_python >/dev/null 2>&1; then
     log "Python 3 already installed"
@@ -181,8 +292,9 @@ setup_virtualenv() {
     exit 1
   fi
   log "Installing project in editable mode"
-  "${ROOT_DIR}/.venv/bin/python" -m pip install --upgrade pip
+  "${ROOT_DIR}/.venv/bin/python" -m pip install --upgrade pip setuptools wheel
   "${ROOT_DIR}/.venv/bin/python" -m pip install -e "${ROOT_DIR}"
+  prompt_package_updates "${ROOT_DIR}/.venv/bin/python"
 }
 
 main() {
@@ -203,6 +315,7 @@ main() {
   }
 
   ensure_pip "$python_cmd"
+  ensure_tkinter "$python_cmd"
   setup_virtualenv "$python_cmd"
 
   log "Setup complete"

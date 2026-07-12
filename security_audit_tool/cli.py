@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
+from .cleanup import cleanup_all, cleanup_artifacts, cleanup_desktop_reports, cleanup_memory_state
 from .inventory import (
     assess_processes,
     inventory_applications,
@@ -71,6 +72,32 @@ def build_parser() -> argparse.ArgumentParser:
         default=25,
         help="Maximum number of installed applications to inventory per run.",
     )
+    parser.add_argument(
+        "--standard",
+        action="append",
+        choices=["ISO27001", "HIPAA", "PCI_DSS"],
+        help="Check compliance with specific standard(s). Can be repeated for multiple standards.",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Launch interactive terminal interface (same as default behavior)",
+    )
+    parser.add_argument(
+        "--use-args",
+        action="store_true",
+        help="Use command-line arguments instead of interactive prompts (for scripting/automation)",
+    )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Remove all generated artifacts and Desktop reports after the audit completes.",
+    )
+    parser.add_argument(
+        "--cleanup-venv",
+        action="store_true",
+        help="Also remove the .venv directory (implies --cleanup; you must re-run setup afterwards).",
+    )
     return parser
 
 
@@ -107,50 +134,54 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    target_os = detect_platform() if args.target_os == "auto" else args.target_os
-    if target_os == "unknown":
-        parser.error("Could not detect a supported platform. Use --target-os explicitly.")
+    # Determine if we should use argument-based mode
+    # Use argument-based mode if:
+    # 1. --use-args flag is explicitly set, OR
+    # 2. Any of the traditional argument flags are provided (for backward compatibility)
+    use_args_mode = (
+        args.use_args
+        or args.format != "text"
+        or args.include_cves
+        or args.results_per_finding != 3
+        or args.output_dir != Path("artifacts")
+        or args.generate_remediation
+        or args.save_to_desktop
+        or args.scan_apps
+        or args.app_limit != 25
+        or args.standard
+    )
 
-    results = run_audit(target_os)
+    if use_args_mode:
+        target_os = detect_platform() if args.target_os == "auto" else args.target_os
+        if target_os == "unknown":
+            parser.error("Could not detect a supported platform. Use --target-os explicitly.")
 
-    if args.include_cves:
-        _attach_cves(results, max(1, args.results_per_finding))
+        results = run_audit(target_os, standards=args.standard)
 
-    application_findings = None
-    applications = None
-    processes = None
-    process_findings = None
-    if args.scan_apps:
-        applications = inventory_applications(target_os, limit=max(1, args.app_limit))
-        processes = inventory_running_processes(target_os, limit=100)
-        process_findings = assess_processes(processes)
-        try:
-            application_findings = map_applications_to_cves(applications)
-        except (HTTPError, URLError, TimeoutError, OSError):
-            application_findings = []
-    os_info = detect_os_info()
+        if args.include_cves:
+            _attach_cves(results, max(1, args.results_per_finding))
 
-    failed_results: list[CheckResult] = [result for _, result in results if result.status == "fail"]
-    remediation_path = None
-    if args.generate_remediation and failed_results:
-        remediation_path = write_remediation_script(args.output_dir, target_os, failed_results)
+        application_findings = None
+        applications = None
+        processes = None
+        process_findings = None
+        if args.scan_apps:
+            applications = inventory_applications(target_os, limit=max(1, args.app_limit))
+            processes = inventory_running_processes(target_os, limit=100)
+            process_findings = assess_processes(processes)
+            try:
+                application_findings = map_applications_to_cves(applications)
+            except (HTTPError, URLError, TimeoutError, OSError):
+                application_findings = []
+        os_info = detect_os_info()
 
-    if args.save_to_desktop:
-        exported = export_report_bundle(
-            target_os,
-            results,
-            remediation_path,
-            application_findings,
-            scanned_applications=applications,
-            os_info=os_info,
-            scanned_processes=processes,
-            process_findings=process_findings,
-        )
-        print(f"Saved reports to Desktop: {exported['text_report']}")
+        failed_results: list[CheckResult] = [result for _, result in results if result.status == "fail"]
+        remediation_path = None
+        if args.generate_remediation and failed_results:
+            remediation_path = write_remediation_script(args.output_dir, target_os, failed_results)
 
-    if args.format == "json":
-        print(
-            render_json_report(
+        if args.save_to_desktop:
+            exported = export_report_bundle(
                 target_os,
                 results,
                 remediation_path,
@@ -159,24 +190,54 @@ def main() -> int:
                 os_info=os_info,
                 scanned_processes=processes,
                 process_findings=process_findings,
-            ),
-            end="",
-        )
+            )
+            print(f"Saved reports to Desktop: {exported['text_report']}")
+
+        if args.format == "json":
+            print(
+                render_json_report(
+                    target_os,
+                    results,
+                    remediation_path,
+                    application_findings,
+                    scanned_applications=applications,
+                    os_info=os_info,
+                    scanned_processes=processes,
+                    process_findings=process_findings,
+                ),
+                end="",
+            )
+        else:
+            print(
+                render_text_report(
+                    target_os,
+                    results,
+                    remediation_path,
+                    application_findings,
+                    scanned_applications=applications,
+                    os_info=os_info,
+                    scanned_processes=processes,
+                    process_findings=process_findings,
+                ),
+                end="",
+            )
+
+        # Cleanup after audit if requested
+        if args.cleanup or args.cleanup_venv:
+            print("\n--- Cleanup ---")
+            cleanup_result = cleanup_all(include_venv=args.cleanup_venv)
+            for section, outcome in cleanup_result.items():
+                for key, ok in outcome.items():
+                    status = "removed" if ok else "FAILED"
+                    print(f"  {key}: {status}")
+            print("Cleanup complete.")
+
+        return 0
     else:
-        print(
-            render_text_report(
-                target_os,
-                results,
-                remediation_path,
-                application_findings,
-                scanned_applications=applications,
-                os_info=os_info,
-                scanned_processes=processes,
-                process_findings=process_findings,
-            ),
-            end="",
-        )
-    return 0
+        # Default: launch interactive terminal interface (prompt-based)
+        # Also handles --interactive flag for backward compatibility
+        from .terminal_ui import main as terminal_main
+        return terminal_main()
 
 
 if __name__ == "__main__":

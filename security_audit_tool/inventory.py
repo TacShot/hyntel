@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
+import tempfile
 import time
+from json import JSONDecodeError
+from urllib.error import HTTPError, URLError
 
 from .models import (
     ApplicationFinding,
@@ -14,6 +18,29 @@ from .models import (
 )
 from .nvd import fetch_cves_by_cpe, search_cpes
 from .system_checks import CommandRunner
+
+
+def get_temp_directories():
+    """Get platform-appropriate temporary directories."""
+    temp_dirs = [tempfile.gettempdir()]
+
+    # Add common platform-specific temp directories
+    if os.name == 'posix':
+        temp_dirs.extend(['/tmp', '/var/tmp'])  # nosec B108 - Intentional for temp directory detection
+        # Check for user-specific temp directories
+        user_temp = os.environ.get('TMPDIR')
+        if user_temp:
+            temp_dirs.append(user_temp)
+    elif os.name == 'nt':
+        temp_dirs.extend([
+            os.environ.get('TEMP', ''),
+            os.environ.get('TMP', ''),
+            os.environ.get('USERPROFILE', '') + '\\AppData\\Local\\Temp'
+        ])
+        # Filter out empty strings
+        temp_dirs = [d for d in temp_dirs if d]
+
+    return [d + os.sep for d in temp_dirs if os.path.isdir(d)]
 
 
 def _first_version_token(value: str) -> str | None:
@@ -160,7 +187,7 @@ def map_applications_to_cves(
 
         try:
             cpes = search_cpes(app.name, limit=cpe_limit, timeout=8)
-        except Exception:
+        except (HTTPError, URLError, TimeoutError, OSError, JSONDecodeError):
             continue
         if not cpes:
             continue
@@ -183,7 +210,7 @@ def map_applications_to_cves(
 
         try:
             cves = fetch_cves_by_cpe(selected_cpe, limit=cve_limit, timeout=8)
-        except Exception:
+        except (HTTPError, URLError, TimeoutError, OSError, JSONDecodeError):
             continue
         if cves:
             findings.append(ApplicationFinding(application=app, cpe_name=selected_cpe, cves=cves))
@@ -283,13 +310,7 @@ def inventory_running_processes(
 
 def assess_processes(processes: list[RunningProcess]) -> list[ProcessFinding]:
     findings: list[ProcessFinding] = []
-    temp_markers = (
-        "/tmp/",
-        "/private/var/",
-        "/var/tmp/",
-        "\\temp\\",
-        "\\appdata\\local\\temp\\",
-    )
+    temp_markers = tuple(get_temp_directories())
     risky_names = {"powershell", "powershell.exe", "cmd.exe", "wscript.exe", "cscript.exe", "mshta.exe", "rundll32.exe"}
     for process in processes:
         reasons: list[str] = []
