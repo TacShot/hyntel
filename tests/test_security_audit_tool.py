@@ -16,6 +16,7 @@ from security_audit_tool.inventory import (
     inventory_applications,
     map_applications_to_cves,
 )
+from security_audit_tool.gui import standards_for_selection
 from security_audit_tool.models import ApplicationFinding, CheckResult, CommandResult, InstalledApplication
 from security_audit_tool.nvd import (
     _extract_cvss,
@@ -677,6 +678,18 @@ class TestSummarizeResults(unittest.TestCase):
         summary = summarize_results(results)
         self.assertEqual(summary["failed"], 0)
         self.assertEqual(summary["skipped"], 0)
+
+
+# ---------------------------------------------------------------------------
+# gui – scan option mapping
+# ---------------------------------------------------------------------------
+
+class TestGuiScanOptions(unittest.TestCase):
+    def test_scan_type_mapping_matches_cli_standards(self):
+        self.assertIsNone(standards_for_selection("general"))
+        self.assertEqual(standards_for_selection("pci"), ["PCI_DSS"])
+        self.assertEqual(standards_for_selection("hipaa"), ["HIPAA"])
+        self.assertEqual(standards_for_selection("iso"), ["ISO27001"])
 
 
 # ---------------------------------------------------------------------------
@@ -1770,3 +1783,273 @@ class TestRenderTextReportExtended(unittest.TestCase):
         self.assertIn("Ubuntu", text)
         self.assertIn("22.04", text)
         self.assertIn("KB001", text)
+
+
+# ---------------------------------------------------------------------------
+# cleanup – secure_delete_file
+# ---------------------------------------------------------------------------
+
+class TestSecureDeleteFile(unittest.TestCase):
+    def test_deletes_existing_file(self):
+        from security_audit_tool.cleanup import secure_delete_file
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = Path(tmpdir) / "secret.txt"
+            fpath.write_text("sensitive audit data here", encoding="utf-8")
+            self.assertTrue(fpath.exists())
+            result = secure_delete_file(fpath)
+            self.assertTrue(result)
+            self.assertFalse(fpath.exists())
+
+    def test_nonexistent_file_returns_false(self):
+        from security_audit_tool.cleanup import secure_delete_file
+        result = secure_delete_file(Path("/nonexistent/path/file.txt"))
+        self.assertFalse(result)
+
+    def test_overwrites_before_delete(self):
+        from security_audit_tool.cleanup import secure_delete_file
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = Path(tmpdir) / "overwrite_test.bin"
+            original = b"AAAA" * 100
+            fpath.write_bytes(original)
+            # Read back to confirm original content
+            self.assertEqual(fpath.read_bytes(), original)
+            secure_delete_file(fpath)
+            self.assertFalse(fpath.exists())
+
+    def test_empty_file(self):
+        from security_audit_tool.cleanup import secure_delete_file
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = Path(tmpdir) / "empty.txt"
+            fpath.write_bytes(b"")
+            result = secure_delete_file(fpath)
+            self.assertTrue(result)
+            self.assertFalse(fpath.exists())
+
+
+# ---------------------------------------------------------------------------
+# cleanup – secure_delete_directory
+# ---------------------------------------------------------------------------
+
+class TestSecureDeleteDirectory(unittest.TestCase):
+    def test_removes_directory_tree(self):
+        from security_audit_tool.cleanup import secure_delete_directory
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subdir = Path(tmpdir) / "nested" / "dir"
+            subdir.mkdir(parents=True)
+            (subdir / "file.txt").write_text("data", encoding="utf-8")
+            (subdir / "file2.csv").write_text("a,b,c", encoding="utf-8")
+            target = Path(tmpdir) / "nested"
+            result = secure_delete_directory(target)
+            self.assertTrue(result)
+            self.assertFalse(target.exists())
+
+    def test_nonexistent_directory_returns_true(self):
+        from security_audit_tool.cleanup import secure_delete_directory
+        result = secure_delete_directory(Path("/nonexistent/dir"))
+        self.assertTrue(result)
+
+    def test_empty_directory(self):
+        from security_audit_tool.cleanup import secure_delete_directory
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "empty"
+            target.mkdir()
+            result = secure_delete_directory(target)
+            self.assertTrue(result)
+            self.assertFalse(target.exists())
+
+
+# ---------------------------------------------------------------------------
+# cleanup – cleanup_artifacts
+# ---------------------------------------------------------------------------
+
+class TestCleanupArtifacts(unittest.TestCase):
+    def test_removes_artifacts_dir(self):
+        from security_audit_tool.cleanup import cleanup_artifacts
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifacts = Path(tmpdir) / "artifacts"
+            artifacts.mkdir()
+            (artifacts / "remediate_linux.sh").write_text("#!/bin/bash\necho hi\n", encoding="utf-8")
+            result = cleanup_artifacts(artifacts_dir=artifacts)
+            self.assertTrue(result["artifacts"])
+            self.assertFalse(artifacts.exists())
+
+    def test_missing_dir_returns_true(self):
+        from security_audit_tool.cleanup import cleanup_artifacts
+        result = cleanup_artifacts(artifacts_dir=Path("/nonexistent/artifacts"))
+        self.assertTrue(result["artifacts"])
+
+
+# ---------------------------------------------------------------------------
+# cleanup – cleanup_desktop_reports
+# ---------------------------------------------------------------------------
+
+class TestCleanupDesktopReports(unittest.TestCase):
+    def test_removes_desktop_dirs(self):
+        from security_audit_tool.cleanup import cleanup_desktop_reports, desktop_audit_reports_dir, desktop_hyntel_report_dir
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Patch the desktop dir functions to point at tmpdir
+            with patch("security_audit_tool.cleanup.desktop_audit_reports_dir", return_value=Path(tmpdir) / "SecurityAuditReports"), \
+                 patch("security_audit_tool.cleanup.desktop_hyntel_report_dir", return_value=Path(tmpdir) / "Hyntel Report"):
+                (Path(tmpdir) / "SecurityAuditReports").mkdir()
+                (Path(tmpdir) / "SecurityAuditReports" / "report.txt").write_text("data", encoding="utf-8")
+                (Path(tmpdir) / "Hyntel Report").mkdir()
+                (Path(tmpdir) / "Hyntel Report" / "report.json").write_text("{}", encoding="utf-8")
+                result = cleanup_desktop_reports()
+                self.assertTrue(result["security_audit_reports"])
+                self.assertTrue(result["hyntel_report"])
+
+
+# ---------------------------------------------------------------------------
+# cleanup – cleanup_pycache
+# ---------------------------------------------------------------------------
+
+class TestCleanupPycache(unittest.TestCase):
+    def test_removes_pycache_dirs(self):
+        from security_audit_tool.cleanup import cleanup_pycache
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pycache = Path(tmpdir) / "src" / "__pycache__"
+            pycache.mkdir(parents=True)
+            (pycache / "module.cpython-312.pyc").write_bytes(b"\x00" * 50)
+            result = cleanup_pycache(project_root=Path(tmpdir))
+            self.assertTrue(result["pycache"])
+            self.assertFalse(pycache.exists())
+
+    def test_removes_stray_pyc_files(self):
+        from security_audit_tool.cleanup import cleanup_pycache
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pyc = Path(tmpdir) / "module.pyc"
+            pyc.write_bytes(b"\x00" * 10)
+            result = cleanup_pycache(project_root=Path(tmpdir))
+            self.assertTrue(result["pycache"])
+            self.assertFalse(pyc.exists())
+
+
+# ---------------------------------------------------------------------------
+# cleanup – cleanup_egg_info
+# ---------------------------------------------------------------------------
+
+class TestCleanupEggInfo(unittest.TestCase):
+    def test_removes_egg_info_dirs(self):
+        from security_audit_tool.cleanup import cleanup_egg_info
+        with tempfile.TemporaryDirectory() as tmpdir:
+            egg = Path(tmpdir) / "mypackage.egg-info"
+            egg.mkdir()
+            (egg / "PKG-INFO").write_text("Name: mypackage\n", encoding="utf-8")
+            result = cleanup_egg_info(project_root=Path(tmpdir))
+            self.assertTrue(result["egg_info"])
+            self.assertFalse(egg.exists())
+
+
+# ---------------------------------------------------------------------------
+# cleanup – cleanup_verification_summary
+# ---------------------------------------------------------------------------
+
+class TestCleanupVerificationSummary(unittest.TestCase):
+    def test_removes_verification_summary(self):
+        from security_audit_tool.cleanup import cleanup_verification_summary
+        with tempfile.TemporaryDirectory() as tmpdir:
+            vsum = Path(tmpdir) / "VERIFICATION_SUMMARY.md"
+            vsum.write_text("# Verification Summary\nSome details\n", encoding="utf-8")
+            result = cleanup_verification_summary(project_root=Path(tmpdir))
+            self.assertTrue(result["verification_summary"])
+            self.assertFalse(vsum.exists())
+
+    def test_missing_file_returns_true(self):
+        from security_audit_tool.cleanup import cleanup_verification_summary
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = cleanup_verification_summary(project_root=Path(tmpdir))
+            self.assertTrue(result["verification_summary"])
+
+
+# ---------------------------------------------------------------------------
+# cleanup – cleanup_venv
+# ---------------------------------------------------------------------------
+
+class TestCleanupVenv(unittest.TestCase):
+    def test_removes_venv(self):
+        from security_audit_tool.cleanup import cleanup_venv
+        with tempfile.TemporaryDirectory() as tmpdir:
+            venv = Path(tmpdir) / ".venv"
+            venv.mkdir()
+            (venv / "pyvenv.cfg").write_text("home = /usr\n", encoding="utf-8")
+            result = cleanup_venv(project_root=Path(tmpdir))
+            self.assertTrue(result["venv"])
+            self.assertFalse(venv.exists())
+
+    def test_missing_venv_returns_true(self):
+        from security_audit_tool.cleanup import cleanup_venv
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = cleanup_venv(project_root=Path(tmpdir))
+            self.assertTrue(result["venv"])
+
+
+# ---------------------------------------------------------------------------
+# cleanup – cleanup_all
+# ---------------------------------------------------------------------------
+
+class TestCleanupAll(unittest.TestCase):
+    def test_runs_all_sections(self):
+        from security_audit_tool.cleanup import cleanup_all
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create artifacts
+            artifacts = Path(tmpdir) / "artifacts"
+            artifacts.mkdir()
+            (artifacts / "remediate_linux.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            # Create __pycache__
+            pycache = Path(tmpdir) / "src" / "__pycache__"
+            pycache.mkdir(parents=True)
+            (pycache / "mod.pyc").write_bytes(b"\x00" * 10)
+            # Create egg-info
+            egg = Path(tmpdir) / "pkg.egg-info"
+            egg.mkdir()
+            (egg / "PKG-INFO").write_text("Name: pkg\n", encoding="utf-8")
+            result = cleanup_all(
+                include_venv=False,
+                include_desktop=False,
+                artifacts_dir=artifacts,
+                project_root=Path(tmpdir),
+            )
+            self.assertTrue(result["artifacts"]["artifacts"])
+            self.assertTrue(result["pycache"]["pycache"])
+            self.assertTrue(result["egg_info"]["egg_info"])
+
+
+# ---------------------------------------------------------------------------
+# cleanup – cleanup_memory_state
+# ---------------------------------------------------------------------------
+
+class TestCleanupMemoryState(unittest.TestCase):
+    def test_clears_gui_attributes(self):
+        from security_audit_tool.cleanup import cleanup_memory_state
+        from security_audit_tool.models import CheckResult, OsInfo, RunningProcess, ProcessFinding, DriverInfo
+
+        class FakeGUI:
+            current_results = [("rule", CheckResult(rule_id="r1", status="fail", details="x"))]
+            current_target_os = "linux"
+            current_remediation_path = Path("/tmp/rem.sh")
+            current_application_findings = ["finding"]
+            current_applications = ["app"]
+            current_drivers = [DriverInfo(name="d", provider="p", signer=None, sign_type="custom", is_signed=True, is_suspicious=False, is_dangerous=False)]
+            current_processes = [RunningProcess(pid=1, name="p")]
+            current_process_findings = [ProcessFinding(process=RunningProcess(pid=1, name="p"), severity="high")]
+            current_os_info = OsInfo(name="Linux", version="5")
+            current_export_paths = {"text_report": Path("/tmp/r.txt")}
+
+        gui = FakeGUI()
+        result = cleanup_memory_state(gui)
+        self.assertTrue(result["memory_state"])
+        self.assertEqual(gui.current_results, [])
+        self.assertIsNone(gui.current_target_os)
+        self.assertIsNone(gui.current_remediation_path)
+        self.assertIsNone(gui.current_application_findings)
+        self.assertEqual(gui.current_applications, [])
+        self.assertEqual(gui.current_drivers, [])
+        self.assertEqual(gui.current_processes, [])
+        self.assertEqual(gui.current_process_findings, [])
+        self.assertIsNone(gui.current_os_info)
+        self.assertEqual(gui.current_export_paths, {})
+
+    def test_none_gui(self):
+        from security_audit_tool.cleanup import cleanup_memory_state
+        result = cleanup_memory_state(None)
+        self.assertTrue(result["memory_state"])

@@ -21,6 +21,7 @@ class AuditRule:
     check: Callable[["CommandRunner"], "CheckResult"]
     remediation: list[str]
     cve_queries: list[CVEQuery] = field(default_factory=list)
+    standards: list[str] = field(default_factory=list)
 
 
 @dataclass

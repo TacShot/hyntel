@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 
 from .cli import _attach_cves
+from .cleanup import cleanup_all, cleanup_artifacts, cleanup_desktop_reports, cleanup_memory_state
 from .inventory import assess_processes, inventory_applications, inventory_running_processes, map_applications_to_cves
 from .models import CheckResult, DriverInfo, OsInfo, ProcessFinding, RunningProcess
 from .reporting import export_report_bundle
@@ -531,6 +532,20 @@ def main() -> int:
                 print(f"{AMBER}  Warning: could not write remediation script: {exc}{RESET}\n")
 
     print()
+    # Post-scan cleanup prompt
+    do_cleanup = _prompt_bool("Clean up all audit artifacts and Desktop reports", False)
+    if do_cleanup:
+        clean_venv = _prompt_bool("Also remove the virtual environment (.venv)", False)
+        print()
+        print(f"{DIM}  Cleaning up audit artifacts...{RESET}")
+        cleanup_result = cleanup_all(include_venv=clean_venv)
+        for section, outcome in cleanup_result.items():
+            for key, ok in outcome.items():
+                status_icon = f"{GREEN}✔{RESET}" if ok else f"{RED}✘{RESET}"
+                print(f"  {status_icon} {key}: {'removed' if ok else 'FAILED'}")
+        print(f"{GREEN}  Cleanup complete.{RESET}\n")
+    else:
+        print(f"{DIM}  Cleanup skipped. Run ./cleanup.sh or use --cleanup flag to remove artifacts later.{RESET}\n")
     return 0
 
 if __name__ == "__main__":

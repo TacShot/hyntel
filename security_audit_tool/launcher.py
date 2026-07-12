@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import traceback
@@ -32,6 +33,7 @@ def _tk_probe() -> tuple[bool, str | None]:
 
 
 def main() -> int:
+    os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
     gui_available, reason = _tk_probe()
     if gui_available:
         try:

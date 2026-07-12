@@ -226,9 +226,9 @@ function Setup-Venv {
     }
 
     Write-Log "Installing project in editable mode"
-    & $pythonExe -m pip install --upgrade pip
+    & $pythonExe -m pip install --upgrade pip setuptools wheel
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to upgrade pip in virtual environment"
+        throw "Failed to upgrade Python packaging tools in virtual environment"
     }
 
     & $pythonExe -m pip install -e $RootDir

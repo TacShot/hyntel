@@ -292,7 +292,7 @@ setup_virtualenv() {
     exit 1
   fi
   log "Installing project in editable mode"
-  "${ROOT_DIR}/.venv/bin/python" -m pip install --upgrade pip
+  "${ROOT_DIR}/.venv/bin/python" -m pip install --upgrade pip setuptools wheel
   "${ROOT_DIR}/.venv/bin/python" -m pip install -e "${ROOT_DIR}"
   prompt_package_updates "${ROOT_DIR}/.venv/bin/python"
 }

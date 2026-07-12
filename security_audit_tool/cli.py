@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
+from .cleanup import cleanup_all, cleanup_artifacts, cleanup_desktop_reports, cleanup_memory_state
 from .inventory import (
     assess_processes,
     inventory_applications,
@@ -86,6 +87,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--use-args",
         action="store_true",
         help="Use command-line arguments instead of interactive prompts (for scripting/automation)",
+    )
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Remove all generated artifacts and Desktop reports after the audit completes.",
+    )
+    parser.add_argument(
+        "--cleanup-venv",
+        action="store_true",
+        help="Also remove the .venv directory (implies --cleanup; you must re-run setup afterwards).",
     )
     return parser
 
@@ -210,6 +221,17 @@ def main() -> int:
                 ),
                 end="",
             )
+
+        # Cleanup after audit if requested
+        if args.cleanup or args.cleanup_venv:
+            print("\n--- Cleanup ---")
+            cleanup_result = cleanup_all(include_venv=args.cleanup_venv)
+            for section, outcome in cleanup_result.items():
+                for key, ok in outcome.items():
+                    status = "removed" if ok else "FAILED"
+                    print(f"  {key}: {status}")
+            print("Cleanup complete.")
+
         return 0
     else:
         # Default: launch interactive terminal interface (prompt-based)

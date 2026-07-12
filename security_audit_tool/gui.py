@@ -3,10 +3,14 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox
+from urllib.error import HTTPError, URLError
 
 from .cli import _attach_cves
+from .cleanup import cleanup_all, cleanup_desktop_reports, cleanup_memory_state
 from .inventory import assess_processes, inventory_applications, inventory_running_processes, map_applications_to_cves
 from .models import CheckResult, DriverInfo, ProcessFinding, RunningProcess
 from .reporting import export_report_bundle
@@ -14,12 +18,35 @@ from .remediation import write_remediation_script
 from .system_checks import detect_os_info, detect_platform, get_windows_drivers, run_audit
 
 
-RETRO_BG = "#0b120d"
-RETRO_PANEL = "#111a13"
-RETRO_TEXT = "#8cff72"
-RETRO_MUTED = "#4f7a52"
+RETRO_BG = "#1f2427"
+RETRO_PANEL = "#262c30"
+RETRO_TEXT = "#f4f6f8"
+RETRO_MUTED = "#b7c0c8"
 RETRO_WARN = "#ffd166"
-RETRO_FAIL = "#ff6b6b"
+RETRO_FAIL = "#ff7a7a"
+RETRO_BORDER = "#5d6972"
+
+
+@dataclass(frozen=True)
+class AuditConfig:
+    target_os_mode: str
+    standard_key: str
+    include_cves: bool
+    generate_remediation: bool
+    scan_apps: bool
+    save_reports: bool
+    remediation_dir: Path
+    report_dir: Path
+
+
+def standards_for_selection(selected: str) -> list[str] | None:
+    mapping = {
+        "general": None,
+        "pci": ["PCI_DSS"],
+        "hipaa": ["HIPAA"],
+        "iso": ["ISO27001"],
+    }
+    return mapping[selected]
 
 
 class SecurityAuditGUI:
@@ -28,6 +55,14 @@ class SecurityAuditGUI:
         self.root.title("Security Audit Terminal")
         self.root.geometry("980x700")
         self.root.configure(bg=RETRO_BG)
+        self.root.tk_setPalette(
+            background=RETRO_BG,
+            foreground=RETRO_TEXT,
+            activeBackground="#2f363b",
+            activeForeground=RETRO_TEXT,
+            selectBackground="#2478d4",
+            selectForeground="#ffffff",
+        )
         self.root.minsize(860, 620)
 
         self.result_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -41,13 +76,19 @@ class SecurityAuditGUI:
         self.current_process_findings: list[ProcessFinding] = []
         self.current_os_info = None
         self.current_export_paths: dict[str, Path] = {}
+        self.current_report_dir = Path.home() / "Desktop" / "Hyntel Report"
 
         self.target_os_var = tk.StringVar(value="auto")
+        self.standard_var = tk.StringVar(value="general")
         self.include_cves_var = tk.BooleanVar(value=False)
         self.generate_remediation_var = tk.BooleanVar(value=True)
         self.scan_apps_var = tk.BooleanVar(value=False)
+        self.save_reports_var = tk.BooleanVar(value=True)
+        self.remediation_dir_var = tk.StringVar(value=str(Path.cwd() / "artifacts"))
+        self.report_dir_var = tk.StringVar(value=str(self.current_report_dir))
         self.status_var = tk.StringVar(value="READY")
         self.export_var = tk.StringVar(value="Desktop export: pending")
+        self.output_buffer = ""
 
         self._configure_style()
         self._build_layout()
@@ -57,150 +98,264 @@ class SecurityAuditGUI:
         self.label_options = {
             "bg": RETRO_BG,
             "fg": RETRO_TEXT,
-            "font": ("Courier", 11),
+            "font": ("Menlo", 11),
         }
         self.panel_label_options = {
             "bg": RETRO_PANEL,
             "fg": RETRO_TEXT,
-            "font": ("Courier", 12, "bold"),
+            "font": ("Menlo", 12, "bold"),
         }
-        self.choice_options = {
+
+    def _make_canvas_label(
+        self,
+        parent: tk.Misc,
+        text: str,
+        *,
+        bg: str = RETRO_BG,
+        fg: str = RETRO_TEXT,
+        font: tuple[str, int] | tuple[str, int, str] = ("Menlo", 11),
+        height: int = 24,
+        anchor: str = "w",
+    ) -> tk.Canvas:
+        canvas = tk.Canvas(parent, height=height, bg=bg, highlightthickness=0, borderwidth=0)
+        x = 0 if anchor == "w" else 8
+        canvas.create_text(x, height // 2, text=text, fill=fg, font=font, anchor=anchor)
+        return canvas
+
+    def _make_panel(self, parent: tk.Misc, **grid_options) -> tk.Frame:
+        wrapper = tk.Frame(parent, bg=RETRO_BORDER, padx=1, pady=1)
+        inner = tk.Frame(wrapper, bg=RETRO_PANEL, padx=14, pady=14)
+        inner.pack(fill="both", expand=True)
+        wrapper.grid(**grid_options)
+        return inner
+
+    def _make_button(self, parent: tk.Misc, text: str, command) -> tk.Button:
+        button = tk.Button(
+            parent,
+            text=text,
+            command=command,
+            bg=RETRO_PANEL,
+            fg=RETRO_TEXT,
+            activebackground="#1a271d",
+            activeforeground="#ffffff",
+            font=("Menlo", 10, "bold"),
+            padx=12,
+            pady=7,
+            borderwidth=1,
+            relief="solid",
+            highlightthickness=1,
+            highlightbackground=RETRO_MUTED,
+            highlightcolor=RETRO_TEXT,
+        )
+        button.bind("<Enter>", lambda _event: button.configure(bg="#1a271d"))
+        button.bind("<Leave>", lambda _event: button.configure(bg=RETRO_PANEL))
+        return button
+
+    def _make_choice(self, parent: tk.Misc, text: str, variable, value, kind: str) -> tk.Widget:
+        widget_class = tk.Checkbutton if kind == "check" else tk.Radiobutton
+        options = {
+            "text": text,
+            "variable": variable,
             "bg": RETRO_PANEL,
             "fg": RETRO_TEXT,
             "activebackground": RETRO_PANEL,
             "activeforeground": RETRO_TEXT,
-            "selectcolor": RETRO_BG,
-            "font": ("Courier", 10),
+            "selectcolor": RETRO_PANEL,
+            "font": ("Menlo", 10),
             "borderwidth": 0,
             "highlightthickness": 0,
+            "anchor": "w",
         }
-        self.button_options = {
-            "bg": RETRO_PANEL,
-            "fg": RETRO_TEXT,
-            "activebackground": "#1a271d",
-            "activeforeground": RETRO_TEXT,
-            "font": ("Courier", 10, "bold"),
-            "borderwidth": 1,
-            "highlightthickness": 1,
-            "highlightbackground": RETRO_MUTED,
-            "highlightcolor": RETRO_TEXT,
-            "padx": 10,
-            "pady": 6,
-        }
+        if kind == "check":
+            return widget_class(parent, **options)
+        return widget_class(parent, value=value, **options)
 
     def _build_layout(self) -> None:
         outer = tk.Frame(self.root, bg=RETRO_BG, padx=18, pady=18)
         outer.pack(fill="both", expand=True)
 
-        header = tk.Label(
+        header = self._make_canvas_label(
             outer,
-            text="SECURITY AUDIT TERMINAL",
-            bg=RETRO_BG,
-            fg=RETRO_TEXT,
-            font=("Courier", 18, "bold"),
+            "SECURITY AUDIT TERMINAL",
+            font=("Menlo", 18, "bold"),
+            height=34,
         )
-        header.pack(anchor="w")
+        header.pack(fill="x")
 
-        subtitle = tk.Label(
+        subtitle = self._make_canvas_label(
             outer,
-            text="Cross-platform security configuration scanning with Desktop report export",
-            **self.label_options,
+            "Cross-platform security configuration scanning with Desktop report export",
+            fg=RETRO_MUTED,
+            font=("Menlo", 11),
+            height=24,
         )
-        subtitle.pack(anchor="w", pady=(4, 14))
+        subtitle.pack(fill="x", pady=(4, 14))
 
-        control_panel = tk.Frame(outer, bg=RETRO_PANEL, padx=14, pady=14, highlightthickness=1, highlightbackground=RETRO_MUTED)
+        control_wrapper = tk.Frame(outer, bg=RETRO_BORDER, padx=1, pady=1)
+        control_wrapper.pack(fill="x")
+        control_panel = tk.Frame(control_wrapper, bg=RETRO_PANEL, padx=14, pady=14)
         control_panel.pack(fill="x")
 
-        tk.Label(control_panel, text="TARGET OS", **self.panel_label_options).grid(row=0, column=0, sticky="w")
+        self._make_canvas_label(control_panel, "TARGET OS", bg=RETRO_PANEL, font=("Menlo", 12, "bold")).grid(row=0, column=0, sticky="ew")
         for idx, option in enumerate(("auto", "linux", "macos", "windows")):
-            tk.Radiobutton(
-                control_panel,
-                text=option.upper(),
-                value=option,
-                variable=self.target_os_var,
-                **self.choice_options,
-            ).grid(row=1, column=idx, sticky="w", padx=(0, 14), pady=(8, 8))
+            self._make_choice(control_panel, option.upper(), self.target_os_var, option, "radio").grid(
+                row=1, column=idx, sticky="w", padx=(0, 18), pady=(8, 10)
+            )
 
-        tk.Checkbutton(
+        self._make_canvas_label(control_panel, "SCAN TYPE", bg=RETRO_PANEL, font=("Menlo", 12, "bold")).grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        scan_options = (
+            ("GENERAL", "general"),
+            ("PCI DSS", "pci"),
+            ("HIPAA", "hipaa"),
+            ("ISO 27001", "iso"),
+        )
+        for idx, (label, value) in enumerate(scan_options):
+            self._make_choice(control_panel, label, self.standard_var, value, "radio").grid(
+                row=3, column=idx, sticky="w", padx=(0, 18), pady=(8, 10)
+            )
+
+        self._make_choice(control_panel, "INCLUDE NVD CVE LOOKUP", self.include_cves_var, True, "check").grid(
+            row=4, column=0, columnspan=2, sticky="w", pady=4
+        )
+        self._make_choice(control_panel, "GENERATE REMEDIATION SCRIPT", self.generate_remediation_var, True, "check").grid(
+            row=4, column=2, columnspan=2, sticky="w", pady=4
+        )
+        self._make_choice(control_panel, "SCAN INSTALLED APPS AND PROCESSES", self.scan_apps_var, True, "check").grid(
+            row=5, column=0, columnspan=2, sticky="w", pady=4
+        )
+        self._make_choice(control_panel, "EXPORT AUDIT REPORTS", self.save_reports_var, True, "check").grid(
+            row=5, column=2, columnspan=2, sticky="w", pady=4
+        )
+
+        self._make_canvas_label(control_panel, "REMEDIATION DIRECTORY", bg=RETRO_PANEL, font=("Menlo", 12, "bold")).grid(row=6, column=0, sticky="ew", pady=(14, 4))
+        remediation_entry = tk.Entry(
             control_panel,
-            text="INCLUDE NVD CVE LOOKUP",
-            variable=self.include_cves_var,
-            **self.choice_options,
-        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=4)
-
-        tk.Checkbutton(
-            control_panel,
-            text="GENERATE REMEDIATION SCRIPT",
-            variable=self.generate_remediation_var,
-            **self.choice_options,
-        ).grid(row=2, column=2, columnspan=2, sticky="w", pady=4)
-        tk.Checkbutton(
-            control_panel,
-            text="SCAN INSTALLED APPS FOR CVES",
-            variable=self.scan_apps_var,
-            **self.choice_options,
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=4)
-
-        button_row = tk.Frame(control_panel, bg=RETRO_PANEL)
-        button_row.grid(row=4, column=0, columnspan=4, sticky="w", pady=(14, 4))
-        tk.Button(button_row, text="RUN AUDIT", command=self._start_audit, **self.button_options).pack(side="left", padx=(0, 10))
-        tk.Button(button_row, text="SAVE REPORTS AGAIN", command=self._save_reports_again, **self.button_options).pack(side="left")
-
-        info_bar = tk.Frame(outer, bg=RETRO_BG)
-        info_bar.pack(fill="x", pady=(14, 10))
-        tk.Label(info_bar, textvariable=self.status_var, **self.label_options).pack(side="left")
-        tk.Label(info_bar, textvariable=self.export_var, **self.label_options).pack(side="right")
-
-        self.output = scrolledtext.ScrolledText(
-            outer,
-            wrap=tk.WORD,
+            textvariable=self.remediation_dir_var,
+            width=50,
             bg=RETRO_BG,
             fg=RETRO_TEXT,
             insertbackground=RETRO_TEXT,
-            selectbackground="#24452a",
-            selectforeground=RETRO_TEXT,
-            font=("Courier", 11),
             relief="flat",
-            borderwidth=0,
-            padx=12,
-            pady=12,
+            font=("Menlo", 10),
+            highlightthickness=1,
+            highlightbackground=RETRO_MUTED,
+            highlightcolor=RETRO_TEXT,
         )
-        self.output.pack(fill="both", expand=True)
+        remediation_entry.grid(row=7, column=0, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
 
-        # Configure colour tags for the text widget
-        self.output.tag_configure("pass", foreground="#8cff72")
-        self.output.tag_configure("fail", foreground="#ff6b6b")
-        self.output.tag_configure("warn", foreground="#ffd166")
-        self.output.tag_configure("skip", foreground="#4f7a52")
-        self.output.tag_configure("header", foreground="#8cff72", font=("Courier", 11, "bold"))
-        self.output.tag_configure("muted", foreground="#4f7a52")
-        self.output.tag_configure("danger", foreground="#ff6b6b", font=("Courier", 11, "bold"))
+        self._make_canvas_label(control_panel, "REPORT DIRECTORY", bg=RETRO_PANEL, font=("Menlo", 12, "bold")).grid(row=6, column=2, sticky="ew", pady=(14, 4))
+        report_entry = tk.Entry(
+            control_panel,
+            textvariable=self.report_dir_var,
+            width=50,
+            bg=RETRO_BG,
+            fg=RETRO_TEXT,
+            insertbackground=RETRO_TEXT,
+            relief="flat",
+            font=("Menlo", 10),
+            highlightthickness=1,
+            highlightbackground=RETRO_MUTED,
+            highlightcolor=RETRO_TEXT,
+        )
+        report_entry.grid(row=7, column=2, columnspan=2, sticky="ew", padx=(0, 10), pady=(0, 8))
+
+        button_row = tk.Frame(control_panel, bg=RETRO_PANEL)
+        button_row.grid(row=8, column=0, columnspan=4, sticky="w", pady=(14, 4))
+        self._make_button(button_row, "RUN AUDIT", self._start_audit).pack(side="left", padx=(0, 10))
+        self._make_button(button_row, "SAVE REPORTS AGAIN", self._save_reports_again).pack(side="left", padx=(0, 10))
+        self._make_button(button_row, "CLEAN UP", self._cleanup).pack(side="left")
+        for column in range(4):
+            control_panel.grid_columnconfigure(column, weight=1)
+
+        info_bar = tk.Frame(outer, bg=RETRO_BG)
+        info_bar.pack(fill="x", pady=(14, 10))
+        self.status_canvas = self._make_canvas_label(info_bar, self.status_var.get(), font=("Menlo", 11, "bold"), height=24)
+        self.status_canvas.pack(side="left", fill="x", expand=True)
+        self.export_canvas = self._make_canvas_label(info_bar, self.export_var.get(), fg=RETRO_MUTED, height=24)
+        self.export_canvas.pack(side="right", fill="x", expand=True)
+
+        output_frame = tk.Frame(outer, bg=RETRO_BORDER, padx=1, pady=1)
+        output_frame.pack(fill="both", expand=True)
+        output_inner = tk.Frame(output_frame, bg=RETRO_BG)
+        output_inner.pack(fill="both", expand=True)
+        self.output_canvas = tk.Canvas(output_inner, bg=RETRO_BG, highlightthickness=0, borderwidth=0)
+        self.output_scrollbar = tk.Scrollbar(output_inner, orient="vertical", command=self.output_canvas.yview)
+        self.output_canvas.configure(yscrollcommand=self.output_scrollbar.set)
+        self.output_scrollbar.pack(side="right", fill="y")
+        self.output_canvas.pack(side="left", fill="both", expand=True)
+        self.output_text_item = self.output_canvas.create_text(
+            12,
+            12,
+            text="",
+            fill=RETRO_TEXT,
+            font=("Menlo", 11),
+            anchor="nw",
+            width=900,
+        )
+        self.output_canvas.bind("<Configure>", self._resize_output_text)
 
         self._append_output("BOOT> GUI initialized.\nBOOT> Press RUN AUDIT to start a scan.\n")
 
     def _append_output(self, text: str, tag: str | None = None) -> None:
-        if tag:
-            self.output.insert(tk.END, text, tag)
-        else:
-            self.output.insert(tk.END, text)
-        self.output.see(tk.END)
+        self.output_buffer += text
+        self.output_canvas.itemconfigure(self.output_text_item, text=self.output_buffer)
+        self._sync_output_scroll()
+
+    def _resize_output_text(self, event: tk.Event) -> None:
+        self.output_canvas.itemconfigure(self.output_text_item, width=max(100, event.width - 28))
+        self._sync_output_scroll()
+
+    def _sync_output_scroll(self) -> None:
+        bbox = self.output_canvas.bbox(self.output_text_item)
+        if bbox:
+            self.output_canvas.configure(scrollregion=(0, 0, bbox[2] + 12, bbox[3] + 12))
+            self.output_canvas.yview_moveto(1.0)
+        self.output_canvas.update_idletasks()
+
+    def _set_status(self, value: str) -> None:
+        self.status_var.set(value)
+        if hasattr(self, "status_canvas"):
+            self.status_canvas.itemconfigure(1, text=value)
+
+    def _set_export(self, value: str) -> None:
+        self.export_var.set(value)
+        if hasattr(self, "export_canvas"):
+            self.export_canvas.itemconfigure(1, text=value)
 
     def _start_audit(self) -> None:
-        self.status_var.set("RUNNING")
-        self.export_var.set("Desktop export: pending")
-        self.output.delete("1.0", tk.END)
-        self._append_output("BOOT> Starting security audit...\n")
-        self._append_output(f"BOOT> Target OS mode: {self.target_os_var.get()}\n")
-        self._append_output(f"BOOT> Include CVEs: {self.include_cves_var.get()}\n")
-        self._append_output(f"BOOT> Generate remediation: {self.generate_remediation_var.get()}\n")
-        self._append_output(f"BOOT> Scan installed apps: {self.scan_apps_var.get()}\n\n")
+        try:
+            config = AuditConfig(
+                target_os_mode=self.target_os_var.get(),
+                standard_key=self.standard_var.get(),
+                include_cves=self.include_cves_var.get(),
+                generate_remediation=self.generate_remediation_var.get(),
+                scan_apps=self.scan_apps_var.get(),
+                save_reports=self.save_reports_var.get(),
+                remediation_dir=Path(self.remediation_dir_var.get()).expanduser(),
+                report_dir=Path(self.report_dir_var.get()).expanduser(),
+            )
+        except OSError as exc:
+            messagebox.showerror("Security Audit Terminal", f"Invalid path: {exc}")
+            return
 
-        worker = threading.Thread(target=self._run_audit_worker, daemon=True)
+        self._set_status("RUNNING")
+        self._set_export("Report export: pending" if config.save_reports else "Report export: disabled")
+        self.output_buffer = ""
+        self.output_canvas.itemconfigure(self.output_text_item, text="")
+        self._append_output("BOOT> Starting security audit...\n")
+        self._append_output(f"BOOT> Target OS mode: {config.target_os_mode}\n")
+        self._append_output(f"BOOT> Scan type: {config.standard_key}\n")
+        self._append_output(f"BOOT> Include CVEs: {config.include_cves}\n")
+        self._append_output(f"BOOT> Generate remediation: {config.generate_remediation}\n")
+        self._append_output(f"BOOT> Scan installed apps and processes: {config.scan_apps}\n")
+        self._append_output(f"BOOT> Export reports: {config.save_reports}\n\n")
+
+        worker = threading.Thread(target=self._run_audit_worker, args=(config,), daemon=True)
         worker.start()
 
-    def _run_audit_worker(self) -> None:
+    def _run_audit_worker(self, config: AuditConfig) -> None:
         try:
-            target_os = detect_platform() if self.target_os_var.get() == "auto" else self.target_os_var.get()
+            target_os = detect_platform() if config.target_os_mode == "auto" else config.target_os_mode
             if target_os == "unknown":
                 raise RuntimeError("Could not detect a supported platform.")
 
@@ -211,8 +366,9 @@ class SecurityAuditGUI:
             except Exception:
                 os_info = None
 
-            results = run_audit(target_os)
-            if self.include_cves_var.get():
+            standards = standards_for_selection(config.standard_key)
+            results = run_audit(target_os, standards=standards)
+            if config.include_cves:
                 self.result_queue.put(("log", "NET> Querying related CVEs from NIST NVD where applicable...\n"))
                 _attach_cves(results, 3)
 
@@ -220,11 +376,15 @@ class SecurityAuditGUI:
             application_findings = None
             processes: list[RunningProcess] = []
             process_findings: list[ProcessFinding] = []
-            if self.scan_apps_var.get():
+            if config.scan_apps:
                 self.result_queue.put(("log", "INV> Inventorying installed applications...\n"))
                 applications = inventory_applications(target_os, limit=25)
                 self.result_queue.put(("log", f"INV> Found {len(applications)} application(s). Matching against NVD CVEs...\n"))
-                application_findings = map_applications_to_cves(applications)
+                try:
+                    application_findings = map_applications_to_cves(applications)
+                except (HTTPError, URLError, TimeoutError, OSError) as exc:
+                    application_findings = []
+                    self.result_queue.put(("log", f"INV> Application CVE lookup unavailable: {exc}\n"))
                 self.result_queue.put(("log", "PROC> Reviewing running processes for suspicious indicators...\n"))
                 processes = inventory_running_processes(target_os, limit=100)
                 process_findings = assess_processes(processes)
@@ -242,17 +402,22 @@ class SecurityAuditGUI:
 
             failed_results: list[CheckResult] = [result for _, result in results if result.status == "fail"]
             remediation_path = None
-            if self.generate_remediation_var.get() and failed_results:
-                remediation_path = write_remediation_script(Path("artifacts"), target_os, failed_results)
+            if config.generate_remediation and failed_results:
+                remediation_path = write_remediation_script(config.remediation_dir, target_os, failed_results)
                 self.result_queue.put(("log", f"FIX> Remediation script generated at {remediation_path}\n"))
 
-            exports = export_report_bundle(
-                target_os, results, remediation_path, application_findings,
-                scanned_applications=applications or None,
-                os_info=os_info,
-                scanned_processes=processes or None,
-                process_findings=process_findings,
-            )
+            exports: dict[str, Path] = {}
+            if config.save_reports:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                export_base = config.report_dir / timestamp
+                exports = export_report_bundle(
+                    target_os, results, remediation_path, application_findings,
+                    desktop_base=export_base,
+                    scanned_applications=applications or None,
+                    os_info=os_info,
+                    scanned_processes=processes or None,
+                    process_findings=process_findings,
+                )
             self.result_queue.put(("done", (target_os, results, remediation_path, applications, application_findings, processes, process_findings, drivers, os_info, exports)))
         except Exception as exc:  # pragma: no cover - GUI fallback path
             self.result_queue.put(("error", str(exc)))
@@ -282,7 +447,7 @@ class SecurityAuditGUI:
                             self._append_output(f"    ... and {len(info.security_patches) - 10} more\n", "muted")
                     self._append_output("\n")
                 elif kind == "error":
-                    self.status_var.set("ERROR")
+                    self._set_status("ERROR")
                     self._append_output(f"ERR> {payload}\n", "fail")
                     messagebox.showerror("Security Audit Terminal", str(payload))
                 elif kind == "done":
@@ -297,14 +462,20 @@ class SecurityAuditGUI:
                     self.current_drivers = drivers
                     self.current_os_info = os_info
                     self.current_export_paths = exports
-                    self.status_var.set("COMPLETE")
-                    self.export_var.set(f"Desktop export: {exports['text_report'].parent}")
+                    self._set_status("COMPLETE")
+                    if exports:
+                        self._set_export(f"Report export: {exports['text_report'].parent}")
+                    else:
+                        self._set_export("Report export: skipped")
                     self._append_output("\nSYS> Audit complete.\n\n", "header")
                     self._render_results(target_os, results, remediation_path, applications, application_findings, processes, process_findings, drivers)
-                    self._append_output("\nEXPORT> Saved text report to Desktop.\n")
-                    self._append_output(f"EXPORT> {exports['text_report']}\n", "muted")
-                    self._append_output(f"EXPORT> {exports['json_report']}\n", "muted")
-                    self._append_output(f"EXPORT> {exports['csv_report']}\n", "muted")
+                    if exports:
+                        self._append_output("\nEXPORT> Saved report bundle.\n")
+                        self._append_output(f"EXPORT> {exports['text_report']}\n", "muted")
+                        self._append_output(f"EXPORT> {exports['json_report']}\n", "muted")
+                        self._append_output(f"EXPORT> {exports['csv_report']}\n", "muted")
+                    else:
+                        self._append_output("\nEXPORT> Report export skipped.\n", "muted")
         except queue.Empty:
             pass
         self.root.after(150, self._poll_queue)
@@ -412,17 +583,50 @@ class SecurityAuditGUI:
             self.current_results,
             self.current_remediation_path,
             self.current_application_findings,
+            desktop_base=Path(self.report_dir_var.get()).expanduser() / datetime.now().strftime("%Y%m%d_%H%M%S"),
             scanned_applications=self.current_applications or None,
             os_info=self.current_os_info,
             scanned_processes=self.current_processes or None,
             process_findings=self.current_process_findings,
         )
         self.current_export_paths = exports
-        self.export_var.set(f"Desktop export: {exports['text_report'].parent}")
-        self._append_output("\nEXPORT> Saved another report bundle to Desktop.\n")
+        self._set_export(f"Report export: {exports['text_report'].parent}")
+        self._append_output("\nEXPORT> Saved another report bundle.\n")
         self._append_output(f"EXPORT> {exports['text_report']}\n", "muted")
         self._append_output(f"EXPORT> {exports['json_report']}\n", "muted")
         self._append_output(f"EXPORT> {exports['csv_report']}\n", "muted")
+
+    def _cleanup(self) -> None:
+        """Clean up audit artifacts, Desktop reports, and clear in-memory state."""
+        if not messagebox.askyesno(
+            "Security Audit Terminal",
+            "This will securely delete all audit artifacts, Desktop reports, "
+            "and clear the current scan results from memory.\n\n"
+            "The virtual environment will NOT be removed.\n\n"
+            "Continue?",
+        ):
+            return
+
+        self._set_status("CLEANING")
+        self._append_output("\nCLEAN> Starting cleanup...\n")
+
+        # Clear in-memory scan state first
+        mem_result = cleanup_memory_state(self)
+        if mem_result.get("memory_state"):
+            self._append_output("CLEAN> In-memory scan state cleared.\n")
+        else:
+            self._append_output("CLEAN> WARNING: Failed to clear some in-memory state.\n", "fail")
+
+        # Clean artifacts and Desktop reports (not venv)
+        cleanup_result = cleanup_all(include_venv=False)
+        for section, outcome in cleanup_result.items():
+            for key, ok in outcome.items():
+                status = "removed" if ok else "FAILED"
+                icon = "✔" if ok else "✘"
+                self._append_output(f"CLEAN> {icon} {key}: {status}\n", "pass" if ok else "fail")
+
+        self._set_status("CLEANED")
+        self._append_output("\nCLEAN> Cleanup complete.\n")
 
     def run(self) -> None:
         self.root.mainloop()
