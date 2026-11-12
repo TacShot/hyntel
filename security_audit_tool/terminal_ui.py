@@ -422,6 +422,8 @@ def main() -> int:
     remediation_dir = Path(_prompt_text("Remediation script directory", default_remediation_dir)).expanduser()
     report_dir = Path(_prompt_text("Save reports to", default_report_dir)).expanduser()
     save_reports = _prompt_bool("Export audit reports", True)
+    scan_logs = _prompt_bool("Scan recent security logs/events", False)
+    verify_ad = target_os == "windows" and _prompt_bool("Verify Active Directory domain configuration", False)
     print()
 
     # Running audit
@@ -449,6 +451,25 @@ def main() -> int:
         print(f"{DIM}  Reviewing running processes for suspicious indicators...{RESET}")
         processes = inventory_running_processes(target_os, limit=100)
         process_findings = assess_processes(processes)
+        print()
+
+    log_result = None
+    ad_result = None
+    if scan_logs:
+        from .log_scanning import scan_security_logs
+        print(f"{DIM}  Scanning recent security logs/events (read-only)...{RESET}")
+        log_result = scan_security_logs(target_os)
+        print(f"  Collected {len(log_result.events)} event(s) from {log_result.source or 'unavailable'}.")
+        for warning in log_result.warnings:
+            print(f"{AMBER}  Log warning: {warning}{RESET}")
+    if verify_ad:
+        from .active_directory import verify_active_directory_config
+        print(f"{DIM}  Verifying Active Directory configuration (read-only)...{RESET}")
+        ad_result = verify_active_directory_config(target_os)
+        for check in ad_result.checks:
+            print(f"  [{check.status.upper()}] {check.title}: {check.details}")
+        for warning in ad_result.warnings:
+            print(f"{AMBER}  AD warning: {warning}{RESET}")
         print()
 
     # Windows driver scan
@@ -481,6 +502,13 @@ def main() -> int:
 
     if drivers:
         _print_driver_info(drivers)
+
+    if log_result is not None:
+        print(f"\nLOG/EVENT SCAN: {len(log_result.events)} event(s) collected.")
+    if ad_result is not None:
+        print(f"\nACTIVE DIRECTORY: {ad_result.domain or 'not domain joined / unavailable'}")
+        for check in ad_result.checks:
+            print(f"  [{check.status.upper()}] {check.title}: {check.details}")
 
     # Export reports (only if user chose to save them)
     if save_reports:
