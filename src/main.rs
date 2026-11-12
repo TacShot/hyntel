@@ -112,14 +112,14 @@ fn application_vulnerabilities(items:&[InventoryItem],limit:usize)->Vec<AppVulne
  let mut findings=Vec::new();
  for app in items{
   let Some(version)=version_token(&app.version)else{continue};
-  let cpe_url=format!("https://services.nvd.nist.gov/rest/json/cpes/2.0?keywordSearch={}&resultsPerPage=5",url::form_urlencoded::byte_serialize(&app.name));
+  let cpe_url=format!("https://services.nvd.nist.gov/rest/json/cpes/2.0?keywordSearch={}&resultsPerPage=5",url::form_urlencoded::byte_serialize(&app.name).collect::<String>());
   let Ok(payload)=nvd_get(&client,&cpe_url)else{continue};
   let cpes=payload["products"].as_array().cloned().unwrap_or_default();
   let mut selected=None;
   for item in &cpes{let name=item["cpe"]["cpeName"].as_str().unwrap_or("");if name.contains(&format!(":{}:",version)){selected=Some(name.to_string());break;}}
   if selected.is_none(){for item in &cpes{let name=item["cpe"]["cpeName"].as_str().unwrap_or("");if name.contains(":*:*:*:*:*:*:*:*:*:*"){selected=Some(name.replacen(":*:",&format!(":{}:",version),1));break;}}}
   let Some(cpe)=selected else{continue};
-  let cve_url=format!("https://services.nvd.nist.gov/rest/json/cves/2.0?cpeName={}&resultsPerPage={}",url::form_urlencoded::byte_serialize(&cpe),limit.clamp(1,10));
+  let cve_url=format!("https://services.nvd.nist.gov/rest/json/cves/2.0?cpeName={}&resultsPerPage={}",url::form_urlencoded::byte_serialize(&cpe).collect::<String>(),limit.clamp(1,10));
   if let Ok(data)=nvd_get(&client,&cve_url){let cves=data["vulnerabilities"].as_array().map(|a|a.iter().map(|z|cve_from_json(&z["cve"])).collect::<Vec<_>>()).unwrap_or_default();if !cves.is_empty(){findings.push(AppVulnerability{application:app.name.clone(),version:app.version.clone(),cpe_name:cpe,cves});}}
   std::thread::sleep(Duration::from_millis(350));
  }
