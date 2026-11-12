@@ -84,8 +84,61 @@ fn summary(f:&[Finding])->BTreeMap<String,usize>{let mut m=BTreeMap::new();for x
 fn text_report(r:&Report)->String{let mut s=format!("HYNTEL SECURITY AUDIT REPORT\nGenerated: {}\nHost OS: {}\nTarget: {}\n\nSUMMARY\n",r.generated_at,r.host_os,r.target_os);for(k,v)in&r.summary{s.push_str(&format!("{}: {}\n",k,v));}s.push_str("\nCONFIGURATION FINDINGS\n");for f in&r.findings{s.push_str(&format!("[{}] {} ({})\n{}\n",f.status.to_uppercase(),f.title,f.severity,f.details));if let Some(x)=&f.observed{s.push_str(&format!("Observed: {}\n",x));}for c in&f.related_cves{s.push_str(&format!("CVE {} {:?} {:?}: {}\n",c.id.as_deref().unwrap_or("?"),c.severity,c.score,c.description));}for x in&f.remediation{s.push_str(&format!("Remediation: {}\n",x));}}s.push_str("\nAPPLICATION INVENTORY\n");for a in&r.applications{s.push_str(&format!("{} {} [{}]\n",a.name,a.version,a.source));}s.push_str("\nPROCESS REVIEW\n");for p in&r.processes{if !p.reasons.is_empty(){s.push_str(&format!("{} PID {}: {}\n",p.name,p.pid,p.reasons.join("; ")));}}s.push_str("\nLOG / EVENT REVIEW\n");for e in&r.log_events{s.push_str(&format!("[{}] {} {}\n",e.level,e.timestamp.as_deref().unwrap_or(""),e.message));}s.push_str("\nACTIVE DIRECTORY CONFIGURATION\n");for a in&r.active_directory{s.push_str(&format!("[{}] {}: {}\n",a.status,a.name,a.details));}s}
 fn export(r:&Report,dir:&Path)->Result<()>{fs::create_dir_all(dir)?;let stem=format!("hyntel_{}_{}",r.target_os,Utc::now().format("%Y%m%d_%H%M%S"));fs::write(dir.join(format!("{}.txt",stem)),text_report(r))?;fs::write(dir.join(format!("{}.json",stem)),serde_json::to_vec_pretty(r)?)?;let mut w=csv::Writer::from_path(dir.join(format!("{}.csv",stem)))?;w.write_record(["section","name","status","severity","details"])?;for f in&r.findings{w.write_record(["configuration",f.title.as_str(),f.status.as_str(),f.severity.as_str(),f.details.as_str()])?;}for a in&r.applications{w.write_record(["application",a.name.as_str(),"inventoried","",a.version.as_str()])?;}for p in&r.processes{w.write_record(["process",p.name.as_str(),p.severity.as_deref().unwrap_or("normal"),"",p.command.as_deref().unwrap_or("")])?;}for e in&r.log_events{w.write_record(["log_event",e.source.as_str(),e.level.as_str(),"",e.message.as_str()])?;}for a in&r.active_directory{w.write_record(["active_directory",a.name.as_str(),a.status.as_str(),"",a.details.as_str()])?;}w.flush()?;Ok(())}
 fn remediate(r:&Report,dir:&Path)->Result<PathBuf>{fs::create_dir_all(dir)?;let p=dir.join(format!("remediation_{}.txt",r.target_os));let mut s=String::from("REMEDIATION PLAN — REVIEW BEFORE EXECUTION. NO ACTIONS ARE EXECUTED AUTOMATICALLY.\n\n");for f in r.findings.iter().filter(|f|f.status=="fail"){s.push_str(&format!("{} ({})\n",f.title,f.severity));for x in&f.remediation{s.push_str(&format!("- {}\n",x));}}fs::write(&p,s)?;Ok(p)}
-fn ask(q:&str,d:&str)->String{print!("{} [{}]: ",q,d);let _=io::stdout().flush();let mut x=String::new();if io::stdin().read_line(&mut x).is_ok()&&!x.trim().is_empty(){x.trim().into()}else{d.into()}}
-fn interact(mut a:Args)->Args{println!("\nHYNTEL — CROSS-PLATFORM SECURITY AUDIT\n1 Current host ({})  2 Linux  3 macOS  4 Windows",host());a.target_os=match ask("Target OS","1").as_str(){"2"=>TargetOs::Linux,"3"=>TargetOs::Macos,"4"=>TargetOs::Windows,_=>TargetOs::Auto};a.include_cves=ask("NVD CVE enrichment? y/N","N").eq_ignore_ascii_case("y");a.scan_apps=ask("Application/process inventory? y/N","N").eq_ignore_ascii_case("y");a.scan_logs=ask("Scan security logs/events (24h)? y/N","N").eq_ignore_ascii_case("y");a.verify_ad=ask("Verify AD/domain configuration? y/N","N").eq_ignore_ascii_case("y");a.generate_remediation=ask("Generate remediation plan? y/N","N").eq_ignore_ascii_case("y");a}
+fn ask(q:&str,d:&str)->String{
+ print!("  {} [{}]: ",q,d);let _=io::stdout().flush();
+ let mut x=String::new();
+ match io::stdin().read_line(&mut x){Ok(0)=>d.into(),Ok(_)=>if x.trim().is_empty(){d.into()}else{x.trim().into()},Err(_)=>d.into()}
+}
+fn ask_bool(q:&str,default:bool)->bool{
+ loop{let d=if default{"Y/n"}else{"y/N"};let x=ask(q,d);match x.to_lowercase().as_str(){ "y"|"yes"|"true"|"1"=>return true,"n"|"no"|"false"|"0"=>return false,_ if x==d=>return default,_=>println!("  Enter y or n.")}}
+}
+fn ask_number(q:&str,default:usize,min:usize,max:usize)->usize{
+ loop{let x=ask(q,&default.to_string());match x.parse::<usize>(){Ok(n) if (min..=max).contains(&n)=>return n,_=>println!("  Enter a number from {} to {}.",min,max)}}
+}
+fn interact(mut a:Args)->Args{
+ println!("\n╔══════════════════════════════════════════════════════════════╗");
+ println!("║                 HYNTEL SECURITY AUDIT                       ║");
+ println!("║       Cross-platform host configuration assessment          ║");
+ println!("╚══════════════════════════════════════════════════════════════╝");
+ println!("\nThis wizard collects read-only host configuration and inventory data.");
+ println!("No system settings will be changed. Remediation output is advisory only.\n");
+ println!("SCAN PROFILE");
+ println!("  1) Baseline audit       — platform security controls");
+ println!("  2) Extended audit       — baseline + apps + processes");
+ println!("  3) Investigation        — logs/events + process review + AD diagnostics");
+ println!("  4) Custom               — choose each scan component");
+ println!("  0) Exit");
+ let profile=loop{let x=ask("Select profile","1");if ["0","1","2","3","4"].contains(&x.as_str()){break x}println!("  Invalid selection. Choose 0–4.");};
+ if profile=="0"{std::process::exit(0);}
+ println!("\nTARGET RULESET");
+ println!("  1) Current host ({})",host());
+ println!("  2) Linux   3) macOS   4) Windows");
+ a.target_os=loop{let x=ask("Target platform","1");match x.as_str(){"1"=>break TargetOs::Auto,"2"=>break TargetOs::Linux,"3"=>break TargetOs::Macos,"4"=>break TargetOs::Windows,_=>println!("  Choose 1, 2, 3, or 4.")}};
+ let extended=profile=="2"||profile=="3";
+ let investigation=profile=="3";
+ let custom=profile=="4";
+ a.scan_apps=extended||custom&&ask_bool("Inventory installed applications and review running processes?",true);
+ a.scan_logs=investigation||custom&&ask_bool("Collect security warnings/errors from the last 24 hours?",false);
+ a.verify_ad=investigation||custom&&ask_bool("Run Active Directory/domain configuration diagnostics?",false);
+ a.include_cves=custom&&ask_bool("Enrich failed baseline checks with related NIST NVD CVEs?",false);
+ if profile=="2"{a.include_cves=ask_bool("Enrich failed baseline checks with related NIST NVD CVEs?",false);}
+ if profile=="3"{a.include_cves=ask_bool("Enrich failed baseline checks with related NIST NVD CVEs?",false);}
+ if a.scan_apps{a.app_limit=ask_number("Maximum applications to inventory",25,1,500);}
+ if a.scan_logs{a.log_limit=ask_number("Maximum log/event records",100,1,5000);}
+ if a.include_cves{a.results_per_finding=ask_number("Maximum related CVEs per failed check",3,1,10);}
+ a.generate_remediation=ask_bool("Generate a review-only remediation plan?",false);
+ println!("\nCOMPLIANCE FILTER");
+ println!("  1) All mapped controls   2) ISO 27001   3) HIPAA   4) PCI DSS");
+ let standards=ask("Compliance scope","1");
+ a.standard=match standards.as_str(){"2"=>vec!["ISO27001".into()],"3"=>vec!["HIPAA".into()],"4"=>vec!["PCI_DSS".into()],_=>vec![]};
+ println!("\nREPORT OUTPUT");
+ a.no_export=!ask_bool("Export TXT, JSON and CSV reports?",true);
+ if !a.no_export{let d=dirs::desktop_dir().unwrap_or_else(||PathBuf::from(".")).join("HyntelReports");let p=ask("Report directory",&d.display().to_string());a.report_dir=Some(PathBuf::from(p));}
+ println!("\nReview: baseline=enabled, applications={}, logs={}, AD={}, NVD={}, remediation={}",
+ if a.scan_apps{"yes"}else{"no"},if a.scan_logs{"yes"}else{"no"},if a.verify_ad{"yes"}else{"no"},if a.include_cves{"yes"}else{"no"},if a.generate_remediation{"yes"}else{"no"});
+ if !ask_bool("Start audit with these settings?",true){println!("Audit cancelled.");std::process::exit(0);}
+ a
+}
 fn execute()->Result<()>{let mut a=Args::parse();if a.interactive||std::env::args().len()==1{a=interact(a);}let os=if a.target_os==TargetOs::Auto{TargetOs::current()}else{a.target_os};if os==TargetOs::Auto{anyhow::bail!("Unsupported host OS; pass --target-os.");}println!("[hyntel] Running {} audit...",os.label());let mut f=audit(os.label());if !a.standard.is_empty(){f.retain(|x|x.standards.iter().any(|s|a.standard.iter().any(|q|q.eq_ignore_ascii_case(s))));}if a.include_cves{println!("[hyntel] Querying NIST NVD; network access required.");cves(&mut f,a.results_per_finding);}let applications=if a.scan_apps{apps(os.label(),a.app_limit)}else{vec![]};let processes=if a.scan_apps{processes(os.label())}else{vec![]};let log_events=if a.scan_logs{logs(os.label(),a.log_limit)}else{vec![]};let active_directory=if a.verify_ad{ad(os.label())}else{vec![]};let r=Report{generated_at:Utc::now(),host_os:host(),target_os:os.label().into(),summary:summary(&f),findings:f,applications,processes,log_events,active_directory};if a.format==OutputFormat::Json{println!("{}",serde_json::to_string_pretty(&r)?);}else{print!("{}",text_report(&r));}if !a.no_export{let d=a.report_dir.unwrap_or_else(||dirs::desktop_dir().unwrap_or_else(||PathBuf::from(".")).join("HyntelReports"));match export(&r,&d){Ok(())=>println!("\n[hyntel] TXT, JSON, CSV exported to {}",d.display()),Err(e)=>eprintln!("[hyntel] Export failed: {}. Specify --report-dir.",e)}}if a.generate_remediation{println!("[hyntel] Remediation plan: {}",remediate(&r,&a.output_dir)?.display());}println!("[hyntel] Complete: {} checks; {} failed.",r.findings.len(),r.findings.iter().filter(|x|x.status=="fail").count());Ok(())}
 fn main(){if let Err(e)=execute(){eprintln!("[hyntel] ERROR: {:#}",e);std::process::exit(1)}}
 #[cfg(test)]mod tests{use super::*;#[test]fn supported_host_label(){assert!(["linux","macos","windows"].contains(&host().as_str()));}#[test]fn summary_counts(){let f=vec![mk("a","A","low","pass","ok".into(),None,""),mk("b","B","high","fail","bad".into(),None,"")];let s=summary(&f);assert_eq!(s["pass"],1);assert_eq!(s["fail"],1);}#[test]fn suspicious_process_indicator(){assert!(!proc_reasons("powershell -enc payload").is_empty());}#[test]fn report_has_all_sections(){let r=Report{generated_at:Utc::now(),host_os:"linux".into(),target_os:"linux".into(),findings:vec![],applications:vec![],processes:vec![],log_events:vec![],active_directory:vec![],summary:BTreeMap::new()};let s=text_report(&r);for h in["CONFIGURATION FINDINGS","APPLICATION INVENTORY","PROCESS REVIEW","LOG / EVENT REVIEW","ACTIVE DIRECTORY CONFIGURATION"]{assert!(s.contains(h));}}}
