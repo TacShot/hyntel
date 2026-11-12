@@ -285,6 +285,26 @@ security-audit --include-cves
 
 This inventories installed applications from the local package manager or operating-system registry, derives candidate CPE matches from NVD, queries CVEs tied to the matched product/version, and reviews running processes for suspicious indicators.
 
+### Security Log / Event Scanning
+
+Collect recent security-relevant events (read-only; default window 24 hours, bounded result count):
+
+```bash
+security-audit --use-args --scan-logs --format json
+```
+
+Windows queries selected Security event IDs; macOS queries the unified log for authentication and SSH-related messages; Linux uses `journalctl` where available and falls back to readable `/var/log/auth.log` or `/var/log/secure`. Access restrictions are reported as warnings. Event messages can contain usernames, hostnames, IP addresses, and other sensitive data; protect exported reports accordingly. The scanner does not modify or upload logs.
+
+### Active Directory Configuration Verification (Windows)
+
+```powershell
+.\\.venv\\Scripts\\security-audit.exe --use-args --verify-ad --format json
+```
+
+The Windows-only verifier checks domain membership and domain-controller discovery. If the RSAT ActiveDirectory PowerShell module is installed, it additionally reads the default domain password policy and reports minimum password length, complexity, reversible password storage, account lockout threshold, and functional levels. Checks are read-only. The initial baseline thresholds are review guidance, not a substitute for your organization's approved policy; this is not a full Group Policy, replication, trust, privileged-group, or domain-controller security assessment. If the host is not domain joined or RSAT is unavailable, the tool reports that limitation instead of inventing a pass result.
+
+The GUI and interactive terminal workflow expose opt-in controls for both scans. Active Directory verification is offered only on Windows.
+
 ### Generate Remediation Script
 
 ```bash
