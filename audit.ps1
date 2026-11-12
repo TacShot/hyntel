@@ -1,74 +1,14 @@
 $ErrorActionPreference = "Stop"
-
-$RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$VenvPython = Join-Path $RootDir ".venv\Scripts\python.exe"
-
-function Write-Log {
-    param([string]$Message)
-    Write-Host "[audit] $Message"
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $Root
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    throw "[hyntel] Rust/Cargo is required. Install from https://rustup.rs/ and reopen PowerShell."
 }
-
-function Ensure-Ready {
-    if (-not (Test-Path $VenvPython)) {
-        throw "Virtual environment not found at $VenvPython. Run .\setup.ps1 first."
-    }
+$Binary = Join-Path $Root "target\release\hyntel.exe"
+if (-not (Test-Path $Binary)) {
+    Write-Host "[hyntel] Building the Rust CLI..."
+    cargo build --release
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
-
-function Invoke-TerminalInterface {
-    Write-Log "Launching the terminal interface"
-    $env:PYTHONIOENCODING = "utf-8"
-    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-    & $VenvPython -m security_audit_tool.terminal_ui
-    exit $LASTEXITCODE
-}
-
-function Invoke-AuditGui {
-    Write-Log "Launching the GUI"
-    $env:PYTHONIOENCODING = "utf-8"          # ← ADDED THIS
-    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8  # ← ADDED THIS
-    & $VenvPython -m security_audit_tool.launcher
-    exit $LASTEXITCODE
-}
-
-function Show-Menu {
-    Write-Host ""
-    Write-Host "Choose an option:"
-    Write-Host "  1) Use Terminal interface"
-    Write-Host "  2) Launch GUI"
-    Write-Host "  3) Exit"
-    Write-Host ""
-}
-
-function Invoke-Selection {
-    param([string]$Selection)
-
-    switch ($Selection) {
-        "1" { Invoke-TerminalInterface }
-        "2" { Invoke-AuditGui }
-        "3" { Write-Log "Exiting"; exit 0 }
-        "0" { Write-Log "Exiting"; exit 0 }
-        "exit" { Write-Log "Exiting"; exit 0 }
-        default { Write-Warning "Invalid selection: $Selection" }
-    }
-}
-
-Ensure-Ready
-
-if ($args.Length -gt 0) {
-    switch ($args[0]) {
-        "--gui" { Invoke-AuditGui }
-        "gui" { Invoke-AuditGui }
-        "2" { Invoke-AuditGui }
-        "--tui" { Invoke-TerminalInterface }
-        "tui" { Invoke-TerminalInterface }
-        "1" { Invoke-TerminalInterface }
-        "3" { Write-Log "Exiting"; exit 0 }
-        default { Invoke-Selection -Selection $args[0] }
-    }
-}
-
-while ($true) {
-    Show-Menu
-    $selection = Read-Host "Enter option number"
-    Invoke-Selection -Selection $selection
-}
+& $Binary @args
+exit $LASTEXITCODE
