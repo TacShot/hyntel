@@ -84,3 +84,6 @@ VERIFICATION_SUMMARY.md
 # Desktop-exported audit reports (may contain sensitive host details)
 SecurityAuditReports/
 Hyntel Report/
+
+/target
+HyntelReports/

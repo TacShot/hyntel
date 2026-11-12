@@ -1,0 +1,19 @@
+[package]
+name = "hyntel"
+version = "1.0.0"
+edition = "2021"
+description = "Cross-platform host security auditing CLI"
+license = "MIT"
+[[bin]]
+name = "hyntel"
+path = "src/main.rs"
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+dirs = "5"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
