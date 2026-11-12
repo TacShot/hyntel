@@ -61,6 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Save the final text and JSON reports to the current user's Desktop.",
     )
+    parser.add_argument("--scan-logs", action="store_true", help="Collect recent security-relevant host log events (read-only).")
+    parser.add_argument("--verify-ad", action="store_true", help="Verify discoverable Active Directory domain configuration (Windows only).")
     parser.add_argument(
         "--scan-apps",
         action="store_true",
@@ -147,6 +149,8 @@ def main() -> int:
         or args.generate_remediation
         or args.save_to_desktop
         or args.scan_apps
+        or args.scan_logs
+        or args.verify_ad
         or args.app_limit != 25
         or args.standard
     )
@@ -174,6 +178,14 @@ def main() -> int:
             except (HTTPError, URLError, TimeoutError, OSError):
                 application_findings = []
         os_info = detect_os_info()
+        log_result = None
+        ad_result = None
+        if args.scan_logs:
+            from .log_scanning import scan_security_logs
+            log_result = scan_security_logs(target_os)
+        if args.verify_ad:
+            from .active_directory import verify_active_directory_config
+            ad_result = verify_active_directory_config(target_os)
 
         failed_results: list[CheckResult] = [result for _, result in results if result.status == "fail"]
         remediation_path = None
@@ -194,33 +206,35 @@ def main() -> int:
             print(f"Saved reports to Desktop: {exported['text_report']}")
 
         if args.format == "json":
-            print(
-                render_json_report(
-                    target_os,
-                    results,
-                    remediation_path,
-                    application_findings,
-                    scanned_applications=applications,
-                    os_info=os_info,
-                    scanned_processes=processes,
-                    process_findings=process_findings,
-                ),
-                end="",
-            )
+            import json
+            report = json.loads(render_json_report(
+                target_os, results, remediation_path, application_findings,
+                scanned_applications=applications, os_info=os_info,
+                scanned_processes=processes, process_findings=process_findings,
+            ))
+            if log_result is not None:
+                from .log_scanning import result_to_dict as log_to_dict
+                report["log_scan"] = log_to_dict(log_result)
+            if ad_result is not None:
+                from .active_directory import result_to_dict as ad_to_dict
+                report["active_directory"] = ad_to_dict(ad_result)
+            print(json.dumps(report, indent=2))
         else:
-            print(
-                render_text_report(
-                    target_os,
-                    results,
-                    remediation_path,
-                    application_findings,
-                    scanned_applications=applications,
-                    os_info=os_info,
-                    scanned_processes=processes,
-                    process_findings=process_findings,
-                ),
-                end="",
-            )
+            print(render_text_report(
+                target_os, results, remediation_path, application_findings,
+                scanned_applications=applications, os_info=os_info,
+                scanned_processes=processes, process_findings=process_findings,
+            ), end="")
+            if log_result is not None:
+                print(f"\nLog scan: {len(log_result.events)} event(s) collected from {log_result.source or 'unavailable'}.")
+                for warning in log_result.warnings:
+                    print(f"  WARNING: {warning}")
+            if ad_result is not None:
+                print(f"\nActive Directory: domain_joined={ad_result.domain_joined}, domain={ad_result.domain or 'N/A'}")
+                for check in ad_result.checks:
+                    print(f"  [{check.status.upper()}] {check.title}: {check.details}")
+                for warning in ad_result.warnings:
+                    print(f"  WARNING: {warning}")
 
         # Cleanup after audit if requested
         if args.cleanup or args.cleanup_venv:
