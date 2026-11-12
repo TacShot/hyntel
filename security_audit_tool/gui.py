@@ -35,6 +35,8 @@ class AuditConfig:
     generate_remediation: bool
     scan_apps: bool
     save_reports: bool
+    scan_logs: bool
+    verify_ad: bool
     remediation_dir: Path
     report_dir: Path
 
@@ -84,6 +86,8 @@ class SecurityAuditGUI:
         self.generate_remediation_var = tk.BooleanVar(value=True)
         self.scan_apps_var = tk.BooleanVar(value=False)
         self.save_reports_var = tk.BooleanVar(value=True)
+        self.scan_logs_var = tk.BooleanVar(value=False)
+        self.verify_ad_var = tk.BooleanVar(value=False)
         self.remediation_dir_var = tk.StringVar(value=str(Path.cwd() / "artifacts"))
         self.report_dir_var = tk.StringVar(value=str(self.current_report_dir))
         self.status_var = tk.StringVar(value="READY")
@@ -227,7 +231,10 @@ class SecurityAuditGUI:
             row=5, column=2, columnspan=2, sticky="w", pady=4
         )
 
-        self._make_canvas_label(control_panel, "REMEDIATION DIRECTORY", bg=RETRO_PANEL, font=("Menlo", 12, "bold")).grid(row=6, column=0, sticky="ew", pady=(14, 4))
+        self._make_choice(control_panel, "SCAN SECURITY LOGS / EVENTS", self.scan_logs_var, True, "check").grid(row=6, column=0, columnspan=2, sticky="w", pady=4)
+        self._make_choice(control_panel, "VERIFY ACTIVE DIRECTORY (WINDOWS)", self.verify_ad_var, True, "check").grid(row=6, column=2, columnspan=2, sticky="w", pady=4)
+
+        self._make_canvas_label(control_panel, "REMEDIATION DIRECTORY", bg=RETRO_PANEL, font=("Menlo", 12, "bold")).grid(row=7, column=0, sticky="ew", pady=(14, 4))
         remediation_entry = tk.Entry(
             control_panel,
             textvariable=self.remediation_dir_var,
@@ -241,9 +248,9 @@ class SecurityAuditGUI:
             highlightbackground=RETRO_MUTED,
             highlightcolor=RETRO_TEXT,
         )
-        remediation_entry.grid(row=7, column=0, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
+        remediation_entry.grid(row=8, column=0, columnspan=2, sticky="ew", padx=(0, 12), pady=(0, 8))
 
-        self._make_canvas_label(control_panel, "REPORT DIRECTORY", bg=RETRO_PANEL, font=("Menlo", 12, "bold")).grid(row=6, column=2, sticky="ew", pady=(14, 4))
+        self._make_canvas_label(control_panel, "REPORT DIRECTORY", bg=RETRO_PANEL, font=("Menlo", 12, "bold")).grid(row=7, column=2, sticky="ew", pady=(14, 4))
         report_entry = tk.Entry(
             control_panel,
             textvariable=self.report_dir_var,
@@ -257,10 +264,10 @@ class SecurityAuditGUI:
             highlightbackground=RETRO_MUTED,
             highlightcolor=RETRO_TEXT,
         )
-        report_entry.grid(row=7, column=2, columnspan=2, sticky="ew", padx=(0, 10), pady=(0, 8))
+        report_entry.grid(row=8, column=2, columnspan=2, sticky="ew", padx=(0, 10), pady=(0, 8))
 
         button_row = tk.Frame(control_panel, bg=RETRO_PANEL)
-        button_row.grid(row=8, column=0, columnspan=4, sticky="w", pady=(14, 4))
+        button_row.grid(row=9, column=0, columnspan=4, sticky="w", pady=(14, 4))
         self._make_button(button_row, "RUN AUDIT", self._start_audit).pack(side="left", padx=(0, 10))
         self._make_button(button_row, "SAVE REPORTS AGAIN", self._save_reports_again).pack(side="left", padx=(0, 10))
         self._make_button(button_row, "CLEAN UP", self._cleanup).pack(side="left")
@@ -331,6 +338,8 @@ class SecurityAuditGUI:
                 generate_remediation=self.generate_remediation_var.get(),
                 scan_apps=self.scan_apps_var.get(),
                 save_reports=self.save_reports_var.get(),
+                scan_logs=self.scan_logs_var.get(),
+                verify_ad=self.verify_ad_var.get(),
                 remediation_dir=Path(self.remediation_dir_var.get()).expanduser(),
                 report_dir=Path(self.report_dir_var.get()).expanduser(),
             )
@@ -400,6 +409,22 @@ class SecurityAuditGUI:
                 except Exception as exc:
                     self.result_queue.put(("log", f"DRV> Driver query failed: {exc}\n"))
 
+            log_result = None
+            ad_result = None
+            if config.scan_logs:
+                from .log_scanning import scan_security_logs
+                self.result_queue.put(("log", "LOG> Collecting recent security log events (read-only)...\\n"))
+                log_result = scan_security_logs(target_os)
+                self.result_queue.put(("log", f"LOG> Collected {len(log_result.events)} event(s).\\n"))
+            if config.verify_ad:
+                from .active_directory import verify_active_directory_config
+                self.result_queue.put(("log", "AD> Verifying Active Directory configuration (read-only)...\\n"))
+                ad_result = verify_active_directory_config(target_os)
+                for check in ad_result.checks:
+                    self.result_queue.put(("log", f"AD> [{check.status.upper()}] {check.title}: {check.details}\\n"))
+                for warning in ad_result.warnings:
+                    self.result_queue.put(("log", f"AD> WARNING: {warning}\\n"))
+
             failed_results: list[CheckResult] = [result for _, result in results if result.status == "fail"]
             remediation_path = None
             if config.generate_remediation and failed_results:
@@ -418,7 +443,7 @@ class SecurityAuditGUI:
                     scanned_processes=processes or None,
                     process_findings=process_findings,
                 )
-            self.result_queue.put(("done", (target_os, results, remediation_path, applications, application_findings, processes, process_findings, drivers, os_info, exports)))
+            self.result_queue.put(("done", (target_os, results, remediation_path, applications, application_findings, processes, process_findings, drivers, os_info, exports, log_result, ad_result)))
         except Exception as exc:  # pragma: no cover - GUI fallback path
             self.result_queue.put(("error", str(exc)))
 
@@ -451,7 +476,7 @@ class SecurityAuditGUI:
                     self._append_output(f"ERR> {payload}\n", "fail")
                     messagebox.showerror("Security Audit Terminal", str(payload))
                 elif kind == "done":
-                    target_os, results, remediation_path, applications, application_findings, processes, process_findings, drivers, os_info, exports = payload
+                    target_os, results, remediation_path, applications, application_findings, processes, process_findings, drivers, os_info, exports, log_result, ad_result = payload
                     self.current_target_os = target_os
                     self.current_results = results
                     self.current_remediation_path = remediation_path
@@ -469,6 +494,16 @@ class SecurityAuditGUI:
                         self._set_export("Report export: skipped")
                     self._append_output("\nSYS> Audit complete.\n\n", "header")
                     self._render_results(target_os, results, remediation_path, applications, application_findings, processes, process_findings, drivers)
+                    if log_result is not None:
+                        self._append_output(f"\\nLOG/EVENT SCAN> {len(log_result.events)} event(s) from {log_result.source or 'unavailable'}\\n", "header")
+                        for warning in log_result.warnings:
+                            self._append_output(f"  WARNING: {warning}\\n", "warn")
+                    if ad_result is not None:
+                        self._append_output(f"\\nACTIVE DIRECTORY> {ad_result.domain or 'not domain joined / unavailable'}\\n", "header")
+                        for check in ad_result.checks:
+                            self._append_output(f"  [{check.status.upper()}] {check.title}: {check.details}\\n")
+                        for warning in ad_result.warnings:
+                            self._append_output(f"  WARNING: {warning}\\n", "warn")
                     if exports:
                         self._append_output("\nEXPORT> Saved report bundle.\n")
                         self._append_output(f"EXPORT> {exports['text_report']}\n", "muted")
