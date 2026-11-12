@@ -62,6 +62,25 @@ fn audit(os:&str)->Vec<Finding>{
  }else if os=="windows"{
   let ps=if exists("pwsh"){"pwsh"}else{"powershell.exe"};
   for (id,title,script,good,fix) in [("windows_firewall_enabled","Windows Firewall enabled","(Get-NetFirewallProfile | Where-Object {$_.Enabled -ne $true}).Count","0","Enable Domain, Private, and Public firewall profiles."),("windows_defender_realtime_enabled","Defender real-time protection enabled","(Get-MpPreference).DisableRealtimeMonitoring","False","Enable Microsoft Defender real-time monitoring."),("windows_rdp_disabled","Remote Desktop disabled","(Get-ItemProperty 'HKLM:\\\\System\\\\CurrentControlSet\\\\Control\\\\Terminal Server').fDenyTSConnections","1","Disable Remote Desktop unless explicitly approved.")]{let x=run(ps,&["-NoProfile","-NonInteractive","-Command",script],8).unwrap_or_default();let ok=x.trim().eq_ignore_ascii_case(good);v.push(mk(id,title,"high",if ok{"pass"}else if x.is_empty(){"skip"}else{"fail"},format!("PowerShell returned: {}",if x.is_empty(){"no data"}else{&x}),Some(x),fix));}
+  let drivers=run(ps,&["-NoProfile","-NonInteractive","-Command","Get-CimInstance Win32_PnPSignedDriver | Where-Object {$_.DeviceName} | Select-Object DeviceName,DriverProviderName,IsSigned,Signer,InfName | ConvertTo-Json -Compress -Depth 2"],12).unwrap_or_default();
+  if !drivers.is_empty(){
+   let parsed:serde_json::Value=serde_json::from_str(&drivers).unwrap_or_default();
+   let items=parsed.as_array().cloned().unwrap_or_else(||if parsed.is_object(){vec![parsed]}else{vec![]});
+   let mut unsigned=Vec::new();let mut custom=Vec::new();
+   for d in &items{
+    let name=d["DeviceName"].as_str().unwrap_or("unknown");
+    let signer=d["Signer"].as_str().unwrap_or("").to_lowercase();
+    let signed=d["IsSigned"].as_bool().unwrap_or(false);
+    let safe=["bluetooth peripheral device","rfcomm com","btfastpair","btnotifyr","nearbysharing","watch","besota","sms/mms","jl_spp","oppointeraction"].iter().any(|x|name.eq_ignore_ascii_case(x));
+    if !safe&&(!signed||signer.is_empty()){unsigned.push(name.to_string());}
+    else if !safe&&!signer.contains("microsoft")&&!signer.contains("windows"){custom.push(name.to_string());}
+   }
+   let status=if !unsigned.is_empty(){"fail"}else if !custom.is_empty(){"warn"}else{"pass"};
+   let details=format!("Enumerated {} PnP drivers; {} unsigned/untrusted signer metadata; {} third-party/custom signed.",items.len(),unsigned.len(),custom.len());
+   let observed=format!("unsigned={}; custom_signed={}",unsigned.len(),custom.len());
+   let fix="Review unsigned and third-party drivers, verify vendor signatures and provenance, and remove only drivers confirmed unnecessary or malicious.";
+   v.push(mk("windows_driver_signing","Windows driver signature verification","critical",status,details,Some(observed),fix));
+  }else{v.push(mk("windows_driver_signing","Windows driver signature verification","critical","skip","Driver signing inventory could not be collected.".into(),None,"Run the audit with sufficient permissions and verify the Windows CIM provider is available."));}
   let b=run(ps,&["-NoProfile","-Command","(Get-BitLockerVolume | Where-Object {$_.ProtectionStatus -eq 'On'}).Count"],8).unwrap_or_default();let ok=b.trim().parse::<u32>().unwrap_or(0)>0;v.push(mk("windows_bitlocker_enabled","BitLocker protection enabled","critical",if ok{"pass"}else if b.is_empty(){"skip"}else{"fail"},format!("Protected volumes: {}",if b.is_empty(){"unknown"}else{&b}),Some(b),"Enable BitLocker and escrow recovery keys."));
  }v
 }
