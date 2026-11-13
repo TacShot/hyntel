@@ -1,0 +1,53 @@
+# hyntel - Cross-platform Security Audit Tool
+
+[package]
+name = "hyntel"
+version = "0.1.0"
+description = "Cross-platform security audit tool with CLI, TUI, and GUI"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/TacShot/hyntel"
+documentation = "https://docs.rs/hyntel"
+homepage = "https://github.com/TacShot/hyntel"
+keywords = ["security", "audit", "cli", "tui", "gui", "rust"]
+categories = ["command-line-utilities", "security", "system-tools"]
+readme = "README.md"
+
+# Binary targets
+[[bin]]
+name = "hyntel"
+path = "hyntel/src/main.rs"
+
+[[bin]]
+name = "hyntel-cli"
+path = "hyntel-cli/src/main.rs"
+
+[[bin]]
+name = "hyntel-tui"
+path = "hyntel-tui/src/main.rs"
+
+[[bin]]
+name = "hyntel-gui"
+path = "hyntel-gui/src/main.rs"
+
+# Target triples for pre-built binaries
+[package.metadata.binstall]
+# Linux
+target = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    # macOS
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    # Windows
+    "x86_64-pc-windows-msvc",
+]
+
+# Build profile for release
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3
+panic = "abort"
+
+# Dependencies are defined in Cargo.toml

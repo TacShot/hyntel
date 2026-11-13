@@ -1,0 +1,17 @@
+[package]
+name = "hyntel-tui"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Terminal UI for hyntel"
+repository = { workspace = true }
+
+[dependencies]
+hyntel-core = { path = "../hyntel-core" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+dirs = { workspace = true }

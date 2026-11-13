@@ -1,0 +1,21 @@
+[package]
+name = "hyntel-core"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Core security audit logic"
+repository = { workspace = true }
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+sysinfo = { workspace = true }
+which = { workspace = true }
+dirs = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs"] }

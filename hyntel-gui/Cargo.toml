@@ -1,0 +1,16 @@
+[package]
+name = "hyntel-gui"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "GUI for hyntel"
+repository = { workspace = true }
+
+[dependencies]
+hyntel-core = { path = "../hyntel-core" }
+egui = { workspace = true }
+eframe = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }

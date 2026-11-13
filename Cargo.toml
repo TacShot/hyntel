@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = ["hyntel-core", "hyntel-cli", "hyntel-tui", "hyntel-gui", "installer"]
+exclude = ["target"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Cross-platform security audit tool in Rust"
+authors = ["Sarthak Sharma"]
+repository = "https://github.com/TacShot/hyntel"
+
+[workspace.dependencies]
+# Core
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_urlencoded = "0.7"
+thiserror = "1.0"
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["serde", "v4", "fast-rng"] }
+
+# Async & HTTP
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "fs", "process", "sync"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
+console = "0.15"
+indicatif = "0.17"
+colored = "2.0"
+
+# TUI
+ratatui = { version = "0.28", features = ["crossterm"] }
+crossterm = "0.28"
+
+# GUI
+egui = { version = "0.29", features = ["default"] }
+eframe = { version = "0.29", features = ["default", "persistence"] }
+
+# Platform detection
+sysinfo = "0.30"
+which = "5.0"
+dirs = "5.0"
+
+# Testing
+tempfile = "3.0"
+predicates = "3.0"
+assert_cmd = "2.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1

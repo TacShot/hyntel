@@ -1,0 +1,15 @@
+[package]
+name = "hyntel"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Cross-platform security audit tool - main binary"
+repository = { workspace = true }
+
+[dependencies]
+hyntel-core = { path = "hyntel-core" }
+hyntel-cli = { path = "hyntel-cli" }
+hyntel-tui = { path = "hyntel-tui" }
+hyntel-gui = { path = "hyntel-gui" }
+clap = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
